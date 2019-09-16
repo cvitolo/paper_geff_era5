@@ -62,16 +62,6 @@ writeRaster(era5, filename = "data/fwi2017era5.nc", format = "CDF",
 
 rm(list = ls())
 
-# GET TIMEZONE DATA ############################################################
-
-# Get time zone vector data:
-# https://en.wikipedia.org/wiki/List_of_UTC_time_offsets
-
-# Data is available from Natural Earth
-# https://www.naturalearthdata.com/downloads/10m-cultural-vectors/timezones/
-
-# Download, unzip and save shapefile in the folder data/ne_10m_time_zones
-
 # GET DATA FROM SYNOP STATIONS #################################################
 # The code in this section can only run within ECMWF internal network because it
 # uses internal resources and tools (stvl)
