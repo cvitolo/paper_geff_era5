@@ -1,6 +1,7 @@
-# Global ECMWF Forest Fire system - Fire danger reanalysis based on ERA5
+# GEFF-ERA5
+> Global ECMWF Forest Fire (GEFF) system - Fire danger reanalysis based on ERA5
 
-This repository contains the data and scripts to reproduce the content of the GEFF-ERA5 data descriptor submitted to the Scientific Data journal.
+This repository contains the scripts to reproduce the content of the GEFF-ERA5 data descriptor:
 
 Vitolo C., Di Giuseppe F., Barnard C., Coughlan R., San-Miguel-Ayanz J., Liberta' G., Krzeminski B. (in preparation). ERA5-based global meteorological wildfire danger maps. Scientific data
 
