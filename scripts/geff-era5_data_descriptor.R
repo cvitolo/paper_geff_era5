@@ -222,28 +222,23 @@ for (myHour in 0:23){
 
 }
 
-# Save all the stations as they are
-saveRDS(stations_all, "data/stations_all.rds")
-saveRDS(df_all, "data/df_all.rds")
-
-rm(list = ls())
-
-# AVERAGE OVER THE 11-13 TIME WINDOW ###########################################
-# (datasets used hereafter are available within the repo) ######################
-
-df_all <- readRDS("data/df_all.rds")
-
+# AVERAGE OVER THE 11-13 TIME WINDOW
 df <- df_all %>%
   group_by(id, lat, long, tzid, season, yr, mon, day) %>%
   summarise(temp = last(`2t`), prec = last(tp), rh = last(rh), ws = last(ws))
-saveRDS(df, "data/df_12noon.rds")
+
+# Save all the stations as they are
+saveRDS(df, "data/df_all.rds")
+# This dataset is saved in the data folder of the repo as it can only be obtained using tools internal to ECMWF.
 
 rm(list = ls())
 
 # PUT TOGETHER DATA FROM SYNOP STATIONS, ERAI AND ERA5 #########################
 
 erai <- raster::brick("data/fwi2017erai.nc")
-era5 <- raster::rotate(raster::brick("data/fwi2017era5.nc")) # lon range [0,360]
+# The dataset below needs to be rotated because the original longitude range is
+# [0,360] while erai is in [-180, +180]
+era5 <- raster::rotate(raster::brick("data/fwi2017era5.nc"))
 
 # If the layers have no dates, we add them.
 names(erai) <- names(era5) <- seq.Date(from = as.Date("2017-01-01"),
@@ -251,10 +246,7 @@ names(erai) <- names(era5) <- seq.Date(from = as.Date("2017-01-01"),
                                        by = "day")
 
 # Load unique stations and data
-# As a starting point we load result data from geff-erai_datadescriptor paper!
-# https://github.com/cvitolo/GEFF-ERAI
-# It is important to start from this, as the stations' lat/lon are not rounded!
-df <- readRDS("data/df_12noon.rds")
+df <- readRDS("data/df_all.rds")
 # There are stations with same id but different lat/lon, let's separate them
 station_unique <- unique(df[, c("id", "lat", "long")])
 
@@ -366,9 +358,6 @@ leaflet(data = stations_used) %>%
 # How many stations are in the North hemisphere?
 round(prop.table(table(stations_used$lat >= 0)), 2)
 
-# How are stations distributed between seasons?
-round(prop.table(table(dfx$season)), 2)
-
 ############################# FIGURE 1 #########################################
 
 # Screenshot of the CDS web interface
@@ -416,11 +405,24 @@ x <- reshape2::melt(data = dfx[, c("region", "OBS", "ERAI", "ERA5")],
                     id = "region")
 
 # Boxplots by regions
-ggplot(x, aes(x=variable, y=value)) +
-  geom_boxplot() +
+ggplot(x, aes(x=variable, y=value, fill = region)) +
+  geom_boxplot(outlier.shape = NA) +
   facet_wrap(~region, scales = "free_y") +
   xlab("") + ylab("FWI") + theme_bw() +
-  theme(text = element_text(size=20))
+  theme(text = element_text(size=20)) +
+  coord_cartesian(ylim = c(0, 150)) +
+  scale_fill_discrete(name = "Region", h = c(0, 360), c = 80, l = 60)
+
+# Custom palette:
+#E16A86 Africa
+#C7821C America
+#909800 Arctic
+#00A846 Asia
+#00AD9A Atlantic
+#00A2D3 Australia
+#9183E6 Europe
+#D766C9 Indian
+#E16A86 Pacific
 
 rm(list = ls())
 
