@@ -7,6 +7,9 @@ if(length(new.packages)) install.packages(new.packages)
 lapply(packs, require, character.only = TRUE)
 rm(packs, new.packages)
 
+# devtools::install_github('kongdd/Ipaper')
+library(Ipaper)
+
 #### ALGORITHM VALIDATION ######################################################
 
 # Compare CFFDRS and GEFF algorithms
@@ -372,26 +375,6 @@ fwi2017 <- raster::rotate(raster::brick("data/fwi2017era5.nc")[[1]])
 # These are all the synop stations
 df <- readRDS("data/df_geff_erai_era5.rds")
 
-# Generate figure
-
-# Convert to sp objects
-sp::coordinates(dfx) <- ~long+lat
-
-# Use GEFF-RE grid to plot the world
-world <- fwi2017[[1]]
-world[world > 0] <- 0
-
-pdf(file = "Synops.pdf", width = 10, height = 6.7)
-raster::plot(world, col = "gray95", legend = FALSE)
-raster::plot(dfx, col = "#2A69A2", pch = 19, cex = 0.1, add = TRUE)
-legend(x = "bottom", legend = "Stations used for validation",
-       col = "#2A69A2", pch = 20, bty = "n", horiz = TRUE)
-dev.off()
-
-### This figure was prettified in QGIS
-
-############################# FIGURE 3 #########################################
-
 dfx <- df %>%
   filter(OBS <= 250) %>% # Remove oddly high value in observations
   # filter(OBS > 0) %>%
@@ -400,18 +383,22 @@ dfx <- df %>%
          subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
   filter(region != "Etc") # remove undefined zones
 
-# Explore global distributions
-x <- reshape2::melt(data = dfx[, c("region", "OBS", "ERAI", "ERA5")],
-                    id = "region")
+# Convert to sp objects
+dfx_sp <- dfx
+sp::coordinates(dfx_sp) <- ~long+lat
 
-# Boxplots by regions
-ggplot(x, aes(x=variable, y=value, fill = region)) +
-  geom_boxplot(outlier.shape = NA) +
-  facet_wrap(~region, scales = "free_y") +
-  xlab("") + ylab("FWI") + theme_bw() +
-  theme(text = element_text(size=20)) +
-  coord_cartesian(ylim = c(0, 150)) +
-  scale_fill_discrete(name = "Region", h = c(0, 360), c = 80, l = 60)
+# Use GEFF-RE grid to plot the world
+world <- fwi2017[[1]]
+world[world > 0] <- 0
+
+pdf(file = "Synops.pdf", width = 10, height = 6.7)
+raster::plot(world, col = "gray95", legend = FALSE)
+raster::plot(dfx_sp, col = "#2A69A2", pch = 19, cex = 0.1, add = TRUE)
+legend(x = "bottom", legend = "Stations used for validation",
+       col = "#2A69A2", pch = 20, bty = "n", horiz = TRUE)
+dev.off()
+
+### This figure was prettified in QGIS
 
 # Custom palette:
 #E16A86 Africa
@@ -424,9 +411,125 @@ ggplot(x, aes(x=variable, y=value, fill = region)) +
 #D766C9 Indian
 #E16A86 Pacific
 
+############################# FIGURE 3 #########################################
+
+# Explore global distributions
+x <- reshape2::melt(data = dfx[, c("region", "OBS", "ERAI", "ERA5")],
+                    id.vars = "region")
+
+# Boxplots by regions
+ggplot(x, aes(x=variable, y=value, fill = region)) +
+  geom_boxplot2(outlier.shape = NA, width = 0.8, width.errorbar = 0.5) +
+  facet_wrap(~region, scales = "free_y") +
+  xlab("") + ylab("FWI") + theme_bw() +
+  theme(text = element_text(size=20)) +
+  scale_fill_discrete(name = "Region", h = c(0, 360), c = 80, l = 60)
+
 rm(list = ls())
 
-### Comparison with ENSO #######################################################
+############################# FIGURE 4 #########################################
+
+# These are all the synop stations
+df <- readRDS("data/df_geff_erai_era5.rds")
+df$season <- "Wet"
+df$season[df$lat < 30 & df$lat > -30] <- "Dry"
+df$season[df$lat > 30 & df$mon %in% 4:9] <- "Dry"
+df$season[df$lat < -30 & df$mon %in% c(1:3, 10:12)] <- "Dry"
+
+dfx_points <- df %>%
+  filter(season == "Dry") %>%
+  # Remove oddly high values
+  filter(OBS <= 150) %>%
+  na.omit %>%
+  mutate(region = sapply(strsplit(tzid, "/"), `[`, 1),
+         subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
+  filter(region != "Etc") %>%
+  mutate(date = as.Date(paste(yr, mon, day, sep = "-"))) %>%
+  dplyr::select(lat, long, region, date, OBS, ERA5)
+
+rm(df)
+
+df <- data.frame(matrix(NA, nrow = 0, ncol = 16))
+dates_2017 <- seq.Date(from = as.Date("2017-01-01"),
+                       to = as.Date("2017-12-31"),
+                       by = "day")
+for (i in seq_along(dates_2017)){
+
+  one_date <- dates_2017[i]
+  print(one_date)
+
+  # Get ERA5 ENS
+  era5 <- raster::stack()
+  for (ens_member in 0:9){
+    era5 <- raster::stack(era5,
+                          file.path("/scratch/rd/nen/perClaudia/era5/ens/fwi",
+                                    paste0("ECMWF_FWI_",
+                                           gsub("-", "", one_date),
+                                           "_1200_0", ens_member, "_fwi.nc")))
+  }
+  era5 <- raster::rotate(era5)
+
+  # Filter points with OBS on a given date
+  dfx_date <- dfx_points[dfx_points$date == one_date, ]
+  # Add placeholders columns
+  dfx_date[, 7:16] <- NA
+  # Convert to sp objects
+  sp::coordinates(dfx_date) <- ~long+lat
+  # Point inspection
+  dfx_date@data[, 5:14] <- raster::extract(x = era5, y = dfx_date)
+
+  x <- as.data.frame(dfx_date)
+  x <- x[complete.cases(x),]
+  df <- rbind(df, x)
+
+}
+
+df_melt <- df %>%
+  reshape2::melt(id.vars = c("region", "lat", "long", "date", "OBS", "ERA5"))
+
+ggplot(df_melt) +
+  facet_wrap(~region, ncol = 4, scale = "free") +
+  # ENS
+  stat_ecdf(aes(x = value, colour = region, group = variable)) +
+  # ERA5
+  stat_ecdf(aes(x = ERA5, linetype = "Reanalysis"), lwd = 0.5) +
+  # OBS
+  stat_ecdf(aes(x = OBS, linetype = "Observations"), lwd = 0.5) +
+  scale_linetype_discrete(name = "") +
+  theme(text = element_text(size=20)) +
+  xlab("") + ylab("") + xlim(0, 100) + ylim(0.5, 1) +
+  scale_colour_discrete(name = "Ensemble", h = c(0, 360), c = 80, l = 60)
+
+# OTHER TESTS
+
+set.seed(0)
+dfx_points_sampled <- dfx_points %>%
+  group_by(region) %>%
+  sample_n(1)
+
+df_points_melt <- df_points_sampled %>%
+  reshape2::melt(id.vars = c("region", "lat", "long", "date", "OBS", "ERA5"))
+
+ggplot(df_points_melt) +
+  stat_ecdf(aes(x=value, colour = region)) +
+  stat_ecdf(aes(x=ERA5), lwd=0.5, linetype="dotted") +
+  stat_ecdf(aes(x=OBS), lwd=0.5) +
+  facet_grid(~region, scale = "free") +
+  scale_colour_discrete(name = "Region")
+
+# Boxplots by regions
+ggplot(df_points_melt) +
+  geom_boxplot(aes(1, value), outlier.shape = NA) +
+  geom_point(aes(1, ERA5), shape = 1, size = 2) +
+  geom_point(aes(1, OBS), shape = 5, size = 2) +
+  facet_wrap(~region, scales = "free_y") +
+  xlab("") + ylab("") + theme_bw() +
+  theme(text = element_text(size=20),
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+# Comparison with ENSO #########################################################
 
 # Crop reanalysis over SE Asia
 system("cdo sellonlatbox,90,132,-14,21 /scratch/rd/nen/perClaudia/era5/fwi.nc data/fwi_era5_seasia.nc")
@@ -500,7 +603,7 @@ levels(df$Intensities) <- c("Very Strong El Nino", "Strong El Nino",
 #   geom_boxplot() + xlab("Percentile") + ylab("") + theme_bw() +
 #   ggtitle("SE Asia") + coord_flip()
 
-############################# FIGURE 4 #########################################
+############################# FIGURE 5 #########################################
 
 ggplot(df, aes(x=variable, y=value, fill = col)) +
   geom_boxplot(outlier.alpha = 0) +
@@ -512,7 +615,7 @@ ggplot(df, aes(x=variable, y=value, fill = col)) +
                     breaks = c("blue", "gray", "red"),
                     values = c("blue", "gray", "red"))
 
-############################# FIGURE 5 #########################################
+############################# FIGURE 6 #########################################
 
 # Map of days above threshold
 myMap <- get_stamenmap(bbox = c(left = bbox(days_above_98)[[1]],
