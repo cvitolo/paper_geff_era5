@@ -47,6 +47,8 @@ for (myday in seq_along(myDates)){
                 destfile = file.path(tmpdir, tmpfilename))
 }
 
+system("cdo cat data/GFWED/* data/fwi2017gfwed.nc")
+
 # EXTRACT YEAR 2017 ONLY FROM ERAI AND ERA5 ####################################
 
 # FWI based on ERAI
@@ -250,7 +252,7 @@ saveRDS(df, "data/df_all.rds")
 
 rm(list = ls())
 
-# PUT TOGETHER DATA FROM SYNOP STATIONS, ERAI AND ERA5 #########################
+# PUT TOGETHER DATA FROM SYNOP STATIONS, ERAI, ERA5 AND GFWED ##################
 
 erai <- raster::brick("data/fwi2017erai.nc")
 # The dataset below needs to be rotated because the original longitude range is
