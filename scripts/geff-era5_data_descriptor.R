@@ -30,6 +30,20 @@ round(cffdrs::fwi(input = y, init = init, out = "fwi"), 2)
 
 rm(list = ls())
 
+# GET DATA FROM GFWED for 2017 #################################################
+myDates <- seq.Date(from = as.Date("2017-01-01"), to = as.Date("2017-12-31"),
+                    by = "day")
+for (myday in seq_along(myDates)){
+  print(myday)
+  tmpdir <- "data/GFWED"
+  reformatted_date <- gsub(pattern = "-", replacement = "", myDates[myday])
+  tmpfilename <- paste0("FWI.GEOS-5.Daily.Default.", reformatted_date, ".nc")
+  download.file(url = paste0("https://portal.nccs.nasa.gov/datashare/GlobalFWI/",
+                              "v2.0/fwiCalcs.GEOS-5/Default/GEOS-5/2017/",
+                              tmpfilename),
+                destfile = file.path(tmpdir, tmpfilename))
+}
+
 # EXTRACT YEAR 2017 ONLY FROM ERAI AND ERA5 ####################################
 
 # FWI based on ERAI
