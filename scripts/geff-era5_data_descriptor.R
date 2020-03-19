@@ -8,7 +8,12 @@ lapply(packs, require, character.only = TRUE)
 rm(packs, new.packages)
 
 # devtools::install_github('kongdd/Ipaper')
-library(Ipaper)
+library("Ipaper")
+
+library("raster")
+library("dplyr")
+library("leaflet")
+library("ggplot2")
 
 #### ALGORITHM VALIDATION ######################################################
 
@@ -27,29 +32,32 @@ round(cffdrs::fwi(input = y, init = init, out = "fwi"), 2)
 
 # GEFF - manual run of GEFF (Fortran code) from the above initial conditions
 # Here are the results:
-# ALGORITHM  & FFMC  & DMC  & DC    & ISI   & BUI  & FWI   & DSR\\
+# ALGORITHM & FFMC  & DMC  & DC    & ISI   & BUI  & FWI   & DSR\\
 # GEFF-ERAI & 87.70 & 8.54 & 19.01 & 10.80 & 8.49 & 10.10 & 1.63\\
 # GEFF-ERA5 & 87.69 & 8.54 & 19.01 & 10.85 & 8.49 & 10.10 & 1.63\\
 
 rm(list = ls())
 
-# GET DATA FROM GFWED for 2017 #################################################
-myDates <- seq.Date(from = as.Date("2017-01-01"), to = as.Date("2017-12-31"),
+# GET DATA FROM GFWED, ERAI AND ERA5 FOR 2017 ##################################
+
+# FWI based on GFWED
+myDates <- seq.Date(from = as.Date("2017-01-01"),
+                    to = as.Date("2017-12-31"),
                     by = "day")
+
 for (myday in seq_along(myDates)){
   print(myday)
-  tmpdir <- "data/GFWED"
   reformatted_date <- gsub(pattern = "-", replacement = "", myDates[myday])
   tmpfilename <- paste0("FWI.GEOS-5.Daily.Default.", reformatted_date, ".nc")
-  download.file(url = paste0("https://portal.nccs.nasa.gov/datashare/GlobalFWI/",
-                              "v2.0/fwiCalcs.GEOS-5/Default/GEOS-5/2017/",
-                              tmpfilename),
-                destfile = file.path(tmpdir, tmpfilename))
+  download.file(url = paste0("https://portal.nccs.nasa.gov/datashare/",
+                             "GlobalFWI/v2.0/fwiCalcs.GEOS-5/Default/",
+                             "GEOS-5/2017/",
+                             tmpfilename),
+                destfile = file.path("/hugetmp/reanalysis/GFWED/all",
+                                     tmpfilename))
 }
-
-system("cdo cat data/GFWED/* data/fwi2017gfwed.nc")
-
-# EXTRACT YEAR 2017 ONLY FROM ERAI AND ERA5 ####################################
+system("cdo select,name=GEOS-5_FWI /hugetmp/reanalysis/GFWED/all/* data/fwi2017gfwed.nc")
+system("cdo remapnn,data/fwi2017era5.nc data/fwi2017gfwed.nc data/fwi2017gfwed_remapped.nc")
 
 # FWI based on ERAI
 # Get fwi.nc (v3.0) from Zenodo: https://doi.org/10.5281/zenodo.3251000
@@ -62,23 +70,14 @@ erai <- erai[[idx]]
 # Save it as "data/fwi2017erai.nc"
 writeRaster(erai, filename = "data/fwi2017erai.nc", format = "CDF",
             overwrite = TRUE)
-
 rm(list = ls())
 
 # FWI based on ERA5
-# Fire danger indices are available from the Copernicus Climate Data Store,
-# however the index FWI is also available from Zenodo.
-# Get data from CDS or Zenodo: https://doi.org/10.5281/zenodo.3269270
-# Rename the file "fwi_era5.nc", then load it as a brick
-era5 <- brick("/hugetmp/Downloads/fwi_era5.nc")
-# Get the indices of the year 2017
-idx <- which(substr(names(era5), 2, 5) == 2017)
-# Subset the datacube (2017 only)
-era5 <- era5[[idx]]
-# Save it as "data/fwi2017erai.nc"
-writeRaster(era5, filename = "data/fwi2017era5.nc", format = "CDF",
-            overwrite = TRUE)
-
+# Fire danger indices are available from the Copernicus Climate Data Store
+system("cdo cat /hugetmp/reanalysis/GEFF-ERA5/hres/fwi/ECMWF_FWI_2017* data/fwi2017era5_temp.nc")
+# The dataset needs to be rotated because the original longitude range is
+# [0,360] while erai and gfwed are in [-180, +180]
+system("cdo sellonlatbox,-180,+180,-90,+90 data/fwi2017era5_temp.nc data/fwi2017era5.nc")
 rm(list = ls())
 
 # GET DATA FROM SYNOP STATIONS #################################################
@@ -255,23 +254,23 @@ rm(list = ls())
 # PUT TOGETHER DATA FROM SYNOP STATIONS, ERAI, ERA5 AND GFWED ##################
 
 erai <- raster::brick("data/fwi2017erai.nc")
-# The dataset below needs to be rotated because the original longitude range is
-# [0,360] while erai is in [-180, +180]
-era5 <- raster::rotate(raster::brick("data/fwi2017era5.nc"))
+gfwed <- raster::brick("data/fwi2017gfwed_remapped.nc")
+era5 <- raster::brick("data/fwi2017era5.nc")
 
 # If the layers have no dates, we add them.
-names(erai) <- names(era5) <- seq.Date(from = as.Date("2017-01-01"),
-                                       to = as.Date("2017-12-31"),
-                                       by = "day")
+names(erai) <- names(era5) <- names(gfwed) <-
+  seq.Date(from = as.Date("2017-01-01"), to = as.Date("2017-12-31"), by = "day")
 
 # Load unique stations and data
 df <- readRDS("data/df_all.rds")
 # There are stations with same id but different lat/lon, let's separate them
 station_unique <- unique(df[, c("id", "lat", "long")])
 
-df_used <- data.frame(matrix(NA, nrow = 0, ncol = ncol(df) + 3))
-names(df_used) <- c(names(df), "OBS", "ERAI", "ERA5")
+df_used <- data.frame(matrix(NA, nrow = 0, ncol = ncol(df) + 4))
+names(df_used) <- c(names(df), "OBS", "ERAI", "GFWED", "ERA5")
 for (i in seq_along(station_unique$id)){
+
+  print(i)
 
   # We filter over the station
   dfx <- df %>% filter(id == station_unique$id[i],
@@ -297,11 +296,12 @@ for (i in seq_along(station_unique$id)){
                                    sprintf("%02d", dfx$day)))
     dfx$ERAI <- temp[mytimestamps]
 
+    # Extract the modelled FWI from GFWED
+    temp <- t(raster::extract(x = gfwed, y = SpatialPoints(pt)))
+    dfx$GFWED <- temp[mytimestamps]
+
     # Extract the modelled FWI from ERA5
     temp <- t(raster::extract(x = era5, y = SpatialPoints(pt)))
-    mytimestamps <- which(substr(names(era5), 2, 11) %in%
-                            paste0(dfx$yr, ".", sprintf("%02d", dfx$mon), ".",
-                                   sprintf("%02d", dfx$day)))
     dfx$ERA5 <- temp[mytimestamps]
 
     df_used <- dplyr::bind_rows(df_used, dfx)
@@ -312,70 +312,9 @@ for (i in seq_along(station_unique$id)){
 
 }
 
-saveRDS(df_used, "data/df_geff_erai_era5.rds")
+df_used$GFWED[df_used$GFWED == "NaN"] <- NA
+saveRDS(df_used, "data/df_geff_erai_gfwed_era5.rds")
 rm(list = ls())
-
-#### Data validation: comparison with observed FWI and old reanalysis (ERAI) ###
-
-df <- readRDS("data/df_geff_erai_era5.rds")
-
-# Split tzid into region and subregion
-dfx <- df %>%
-  filter(OBS <= 250) %>% # Remove oddly high value in observations
-  na.omit %>%
-  mutate(region = sapply(strsplit(tzid, "/"), `[`, 1),
-         subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
-  filter(region != "Etc") %>% # remove undefined zones
-  # dplyr::select(id, lat, long, region, season, OBS, ERAI, ERA5) %>%
-  dplyr::select(id, lat, long, region, OBS, ERAI, ERA5) %>%
-  # group_by(id, lat, long, region, season) %>%
-  group_by(id, lat, long, region) %>%
-  #add_tally() %>% # add station count
-  #filter(n >= 30) %>% # remove stations with less than 30 records
-  summarise( # Bias and Anomaly correlation by time, id and season
-            bias_erai = mean(OBS - ERAI, na.rm = TRUE),
-            bias_era5 = mean(OBS - ERA5, na.rm = TRUE),
-            anomaly_correlation_erai = cor(OBS - mean(OBS, na.rm = T),
-                                           ERAI - mean(ERAI, na.rm = T),
-                                           use = "complete.obs"),
-            anomaly_correlation_era5 = cor(OBS - mean(OBS, na.rm = T),
-                                           ERA5 - mean(ERA5, na.rm = T),
-                                           use = "complete.obs")) %>%
-  na.omit
-
-# As the standard deviation for ERAI generates NAs, some records are removed and
-# this affects the skill of ERA5 as well
-
-# Summarise results in a table
-dfx_summary <- dfx %>%
-  # group_by(region, season) %>%
-  group_by(region) %>%
-  summarise(count = n(),
-            bias_erai = round(median(bias_erai, na.rm = T), 2),
-            bias_era5 = round(median(bias_era5, na.rm = T), 2),
-            ac_erai = round(median(anomaly_correlation_erai, na.rm = T), 2),
-            ac_era5 = round(median(anomaly_correlation_era5, na.rm = T), 2))
-# copy-paste this into latex main.tex
-xtable::xtable(x = dfx_summary, caption = "Validation")
-
-range(dfx_summary$bias_erai)
-range(dfx_summary$bias_era5)
-
-# Is ERA5 bias statistically significantly different from ERAI bias? NO!
-t.test(dfx_summary$bias_erai, dfx_summary$bias_era5, alternative = "two.sided",
-       var.equal = TRUE)
-
-stations_used <- dfx %>% group_by(id) %>%
-  summarize(lat = as.numeric(names(which.max(table(lat)))),
-            long = as.numeric(names(which.max(table(long))))) # 3077 stations
-
-# Check locations on interactive map
-leaflet(data = stations_used) %>%
-  addTiles() %>%
-  addMarkers(~long, ~lat, label = ~as.character(id))
-
-# How many stations are in the North hemisphere?
-round(prop.table(table(stations_used$lat >= 0)), 2)
 
 ############################# FIGURE 1 #########################################
 
@@ -383,70 +322,154 @@ round(prop.table(table(stations_used$lat >= 0)), 2)
 
 ############################# FIGURE 2 #########################################
 
-rm(list = ls())
+# Data validation: comparison with observed FWI, ERAI and GFWED
 
-# REANALYSIS 2017 only
-fwi2017 <- raster::rotate(raster::brick("data/fwi2017era5.nc")[[1]])
+df <- readRDS("data/df_geff_erai_gfwed_era5.rds")
 
-# These are all the synop stations
-df <- readRDS("data/df_geff_erai_era5.rds")
+minimum_size <- 1
+maximum_bias <- 250
+scaling_function <- function(x) {sqrt(x)}
 
-dfx <- df %>%
-  filter(OBS <= 250) %>% # Remove oddly high value in observations
-  # filter(OBS > 0) %>%
-  na.omit %>%
+df_to_map_era5 <- df %>%
+  # Split tzid into region and subregion
   mutate(region = sapply(strsplit(tzid, "/"), `[`, 1),
          subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
-  filter(region != "Etc") # remove undefined zones
+  filter(region != "Etc") %>% # remove undefined zones
+  filter(!is.na(OBS), !is.na(ERA5)) %>% # make sure you have data to compare
+  filter(OBS <= 250) %>% # remove unreliable observations
+  group_by(id) %>%
+  add_tally() %>% # add station count
+  filter(n >= 30) %>% # remove stations with less than 30 days in a year
+  summarise(lat = as.numeric(names(which.max(table(lat)))),
+            long = as.numeric(names(which.max(table(long)))),
+            region = names(which.max(table(region))),
+            obs = round(mean(OBS, na.rm = TRUE), 2),
+            erai = round(mean(ERAI, na.rm = TRUE), 2),
+            gfwed = round(mean(GFWED, na.rm = TRUE), 2),
+            era5 = round(mean(ERA5, na.rm = TRUE), 2),
+            # Bias and Anomaly correlation (and p-values)
+            bias_era5 = round(mean(OBS - ERA5, na.rm = TRUE), 2),
+            ac_era5 = round(cor(OBS - mean(OBS, na.rm = T),
+                                ERA5 - mean(ERA5, na.rm = T)), 2),
+            p_value = cor.test(OBS - mean(OBS, na.rm = T),
+                               ERA5 - mean(ERA5, na.rm = T))$p.value < 0.05) %>%
+  mutate(color = ifelse(abs(bias_era5) >= maximum_bias, 1,
+                        ifelse(p_value == TRUE, 2, 3)),
+         radius = ifelse(abs(bias_era5) <= 1, minimum_size,
+                         ifelse(abs(bias_era5) >= maximum_bias,
+                                minimum_size + scaling_function(maximum_bias),
+                                minimum_size +
+                                  scaling_function(abs(bias_era5)))),
+         opacity = abs(1 - ac_era5))
 
-# Convert to sp objects
-dfx_sp <- dfx
-sp::coordinates(dfx_sp) <- ~long+lat
+ids_to_keep <- df_to_map_era5$id[df_to_map_era5$color == 2]
 
-# Use GEFF-RE grid to plot the world
-world <- fwi2017[[1]]
-world[world > 0] <- 0
+labels <- c("Unreliable observations",
+            "Cor. is stat. significant",
+            "Cor. is not stat. significant")
 
-pdf(file = "Synops.pdf", width = 10, height = 6.7)
-raster::plot(world, col = "gray95", legend = FALSE)
-raster::plot(dfx_sp, col = "#2A69A2", pch = 19, cex = 0.1, add = TRUE)
-legend(x = "bottom", legend = "Stations used for validation",
-       col = "#2A69A2", pch = 20, bty = "n", horiz = TRUE)
-dev.off()
+pal <- colorFactor(palette = c("grey", "navy", "red"),
+                   domain = df_to_map_era5$color)
 
-### This figure was prettified in QGIS
+# Check locations on interactive map
+leaflet(data = df_to_map_era5) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>% # addTiles()
+  addCircleMarkers(~long, ~lat,
+                   radius = ~radius,
+                   color = ~pal(color),
+                   fillOpacity = ~opacity,
+                   stroke = FALSE,
+                   popup = ~paste("<strong>", "Bias:", "</strong>",
+                                  bias_era5, "<br>",
+                                  "<strong>", "Anomaly correlation:",
+                                  "</strong>", ac_era5, "<br>",
+                                  "<strong>", "Statistically significant:",
+                                  "</strong>", p_value)) %>%
+  setMaxBounds(lng1 = -180, lat1 = -90, lng2 = 180, lat2 = 90) %>%
+  addLegend(position = "topright",
+            pal = pal,
+            title = "GEFF-ERA5 vs OBS",
+            values = ~color,
+            opacity = 1,
+            labFormat = function(type, cuts, p) {  # Here's the trick
+              paste0(labels)
+            }
+  )
 
-# Custom palette:
-#E16A86 Africa
-#C7821C America
-#909800 Arctic
-#00A846 Asia
-#00AD9A Atlantic
-#00A2D3 Australia
-#9183E6 Europe
-#D766C9 Indian
-#E16A86 Pacific
+# PUBLISH ON RPUBS THE INTERACTIVE MAP, THEN TAKE A SCREENSHOT FOR THE PAPER
+
+############################# TABLE 1 ##########################################
+
+# Keep only blue circles and compare to
+
+df_to_compare <- df %>%
+  # Keep only reliable obs for which cor is significant
+  filter(id %in% ids_to_keep, OBS <= 250) %>%
+  # Split tzid into region and subregion
+  mutate(region = sapply(strsplit(tzid, "/"), `[`, 1),
+         subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
+  filter(region != "Etc") %>%
+  filter(complete.cases(.)) %>%
+  group_by(id) %>%
+  add_tally() %>% # add station count
+  filter(n >= 30) %>% # remove stations with less than 30 days in a year
+  select(id, lat, long, region, OBS, ERAI, GFWED, ERA5) %>%
+  summarise(lat = as.numeric(names(which.max(table(lat)))),
+            long = as.numeric(names(which.max(table(long)))),
+            region = names(which.max(table(region))),
+            obs = round(mean(OBS, na.rm = TRUE), 2),
+            erai = round(mean(ERAI, na.rm = TRUE), 2),
+            gfwed = round(mean(GFWED, na.rm = TRUE), 2),
+            era5 = round(mean(ERA5, na.rm = TRUE), 2),
+            # Bias and Anomaly correlation by time, id and season
+            bias_erai = round(mean(OBS - ERAI, na.rm = TRUE), 2),
+            bias_gfwed = round(mean(OBS - GFWED, na.rm = TRUE), 2),
+            bias_era5 = round(mean(OBS - ERA5, na.rm = TRUE), 2),
+            ac_erai = round(cor(OBS - mean(OBS, na.rm = T),
+                                ERAI - mean(ERAI, na.rm = T)), 2),
+            ac_gfwed = round(cor(OBS - mean(OBS, na.rm = T),
+                                 GFWED - mean(GFWED, na.rm = T)), 2),
+            ac_era5 = round(cor(OBS - mean(OBS, na.rm = T),
+                                ERA5 - mean(ERA5, na.rm = T)), 2))
+
+# Summary table for large regions - copy-paste this into latex main.tex
+dfx_to_table <- df_to_compare %>%
+  group_by(region) %>%
+  summarise(n = n(), # Bias and Anomaly correlation by time, id and season
+            bias_erai = round(mean(bias_erai), 2),
+            bias_gfwed = round(mean(bias_gfwed), 2),
+            bias_era5 = round(mean(bias_era5), 2),
+            ac_erai = round(mean(ac_erai), 2),
+            ac_gfwed = round(mean(ac_gfwed), 2),
+            ac_era5 = round(mean(ac_era5), 2))
+
+xtable::xtable(x = dfx_to_table, caption = "Validation")
 
 ############################# FIGURE 3 #########################################
 
 # Explore global distributions
-x <- reshape2::melt(data = dfx[, c("region", "OBS", "ERAI", "ERA5")],
+x <- reshape2::melt(data = df_to_compare[, c("region", "obs",
+                                             "erai", "gfwed", "era5")],
                     id.vars = "region")
 
 # Boxplots by regions
 ggplot(x, aes(x=variable, y=value, fill = region)) +
-  geom_boxplot2(outlier.shape = NA, width = 0.8, width.errorbar = 0.5) +
+  Ipaper::geom_boxplot2(outlier.shape = NA, width = 0.8, width.errorbar = 0.5) +
   facet_wrap(~region, scales = "free_y") +
   xlab("") + ylab("FWI") + theme_bw() +
   theme(text = element_text(size=20)) +
-  scale_fill_discrete(name = "Region", h = c(0, 360), c = 80, l = 60)
+  scale_fill_discrete(name = "Region", h = c(0, 360), c = 80, l = 60) +
+  theme(legend.position = "none") +
+  scale_x_discrete(#breaks=c("0.5","1","2"),
+                   labels=c("OBS", "ERAI", "GFWED", "ERA5"))
 
 rm(list = ls())
 
 ############################# FIGURE 4 #########################################
 
 # These are all the synop stations
-df <- readRDS("data/df_geff_erai_era5.rds")
+df <- readRDS("data/df_geff_erai_gfwed_era5.rds")
+
 df$season <- "Wet"
 df$season[df$lat < 30 & df$lat > -30] <- "Dry"
 df$season[df$lat > 30 & df$mon %in% 4:9] <- "Dry"
