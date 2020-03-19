@@ -336,7 +336,7 @@ df_to_map_era5 <- df %>%
          subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
   filter(region != "Etc") %>% # remove undefined zones
   filter(!is.na(OBS), !is.na(ERA5)) %>% # make sure you have data to compare
-  filter(OBS <= 250) %>% # remove unreliable observations
+  #filter(OBS <= 250) %>% # remove unreliable observations
   group_by(id) %>%
   add_tally() %>% # add station count
   filter(n >= 30) %>% # remove stations with less than 30 days in a year
@@ -361,8 +361,6 @@ df_to_map_era5 <- df %>%
                                 minimum_size +
                                   scaling_function(abs(bias_era5)))),
          opacity = abs(1 - ac_era5))
-
-ids_to_keep <- df_to_map_era5$id[df_to_map_era5$color == 2]
 
 labels <- c("Unreliable observations",
             "Cor. is stat. significant",
@@ -401,6 +399,7 @@ leaflet(data = df_to_map_era5) %>%
 ############################# TABLE 1 ##########################################
 
 # Keep only blue circles and compare to
+ids_to_keep <- df_to_map_era5$id[df_to_map_era5$color == 2]
 
 df_to_compare <- df %>%
   # Keep only reliable obs for which cor is significant
