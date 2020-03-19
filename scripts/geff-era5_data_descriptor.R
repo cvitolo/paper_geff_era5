@@ -9,34 +9,10 @@ rm(packs, new.packages)
 
 # devtools::install_github('kongdd/Ipaper')
 library("Ipaper")
-
 library("raster")
 library("dplyr")
 library("leaflet")
 library("ggplot2")
-
-#### ALGORITHM VALIDATION ######################################################
-
-# Compare CFFDRS and GEFF algorithms
-y <- structure(list(long = -91.82, lat = 45.98, hour = 18,
-                    yr = 2017L, mon = 1L, day = 1L, temp = 17,
-                    rh = 42, ws = 25, prec = 0),
-               .Names = c("long", "lat", "hour", "yr", "mon", "day", "temp",
-                          "rh", "ws", "prec"),
-               row.names = 1L, class = "data.frame")
-init <- data.frame(ffmc = 85, dmc = 6, dc = 15, lat = y$lat)
-round(cffdrs::fwi(input = y, init = init, out = "fwi"), 2)
-
-# ALGORITHM        & FFMC  & DMC  & DC    & ISI   & BUI  & FWI  & DSR\\
-# R package cffdrs & 87.69 & 7.29 & 17.76 & 10.85 & 7.28 & 9.46 & 1.45\\
-
-# GEFF - manual run of GEFF (Fortran code) from the above initial conditions
-# Here are the results:
-# ALGORITHM & FFMC  & DMC  & DC    & ISI   & BUI  & FWI   & DSR\\
-# GEFF-ERAI & 87.70 & 8.54 & 19.01 & 10.80 & 8.49 & 10.10 & 1.63\\
-# GEFF-ERA5 & 87.69 & 8.54 & 19.01 & 10.85 & 8.49 & 10.10 & 1.63\\
-
-rm(list = ls())
 
 # GET DATA FROM GFWED, ERAI AND ERA5 FOR 2017 ##################################
 
@@ -336,7 +312,6 @@ df_to_map_era5 <- df %>%
          subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
   filter(region != "Etc") %>% # remove undefined zones
   filter(!is.na(OBS), !is.na(ERA5)) %>% # make sure you have data to compare
-  #filter(OBS <= 250) %>% # remove unreliable observations
   group_by(id) %>%
   add_tally() %>% # add station count
   filter(n >= 30) %>% # remove stations with less than 30 days in a year
@@ -349,10 +324,10 @@ df_to_map_era5 <- df %>%
             era5 = round(mean(ERA5, na.rm = TRUE), 2),
             # Bias and Anomaly correlation (and p-values)
             bias_era5 = round(mean(OBS - ERA5, na.rm = TRUE), 2),
-            ac_era5 = round(cor(OBS - mean(OBS, na.rm = T),
-                                ERA5 - mean(ERA5, na.rm = T)), 2),
-            p_value = cor.test(OBS - mean(OBS, na.rm = T),
-                               ERA5 - mean(ERA5, na.rm = T))$p.value < 0.05) %>%
+            ac_era5 = round(cor(OBS - mean(OBS, na.rm = TRUE),
+                                ERA5 - mean(ERA5, na.rm = TRUE)), 2),
+            p_value = cor.test(OBS - mean(OBS, na.rm = TRUE),
+                               ERA5 - mean(ERA5, na.rm = TRUE))$p.value < 0.05) %>%
   mutate(color = ifelse(abs(bias_era5) >= maximum_bias, 1,
                         ifelse(p_value == TRUE, 2, 3)),
          radius = ifelse(abs(bias_era5) <= 1, minimum_size,
@@ -398,21 +373,16 @@ leaflet(data = df_to_map_era5) %>%
 
 ############################# TABLE 1 ##########################################
 
-# Keep only blue circles and compare to
-ids_to_keep <- df_to_map_era5$id[df_to_map_era5$color == 2]
-
 df_to_compare <- df %>%
-  # Keep only reliable obs for which cor is significant
-  filter(id %in% ids_to_keep, OBS <= 250) %>%
   # Split tzid into region and subregion
   mutate(region = sapply(strsplit(tzid, "/"), `[`, 1),
          subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
-  filter(region != "Etc") %>%
-  filter(complete.cases(.)) %>%
+  filter(region != "Etc") %>% # remove undefined zones
+  filter(!is.na(OBS), !is.na(ERA5)) %>% # make sure you have data to compare
+  filter(!is.na(GFWED)) %>% # only station where gfwed is calculated
   group_by(id) %>%
   add_tally() %>% # add station count
   filter(n >= 30) %>% # remove stations with less than 30 days in a year
-  select(id, lat, long, region, OBS, ERAI, GFWED, ERA5) %>%
   summarise(lat = as.numeric(names(which.max(table(lat)))),
             long = as.numeric(names(which.max(table(long)))),
             region = names(which.max(table(region))),
@@ -424,12 +394,15 @@ df_to_compare <- df %>%
             bias_erai = round(mean(OBS - ERAI, na.rm = TRUE), 2),
             bias_gfwed = round(mean(OBS - GFWED, na.rm = TRUE), 2),
             bias_era5 = round(mean(OBS - ERA5, na.rm = TRUE), 2),
-            ac_erai = round(cor(OBS - mean(OBS, na.rm = T),
-                                ERAI - mean(ERAI, na.rm = T)), 2),
-            ac_gfwed = round(cor(OBS - mean(OBS, na.rm = T),
-                                 GFWED - mean(GFWED, na.rm = T)), 2),
-            ac_era5 = round(cor(OBS - mean(OBS, na.rm = T),
-                                ERA5 - mean(ERA5, na.rm = T)), 2))
+            ac_erai = round(cor(OBS - mean(OBS, na.rm = TRUE),
+                                ERAI - mean(ERAI, na.rm = TRUE)), 2),
+            ac_gfwed = round(cor(OBS - mean(OBS, na.rm = TRUE),
+                                 GFWED - mean(GFWED, na.rm = TRUE)), 2),
+            ac_era5 = round(cor(OBS - mean(OBS, na.rm = TRUE),
+                                ERA5 - mean(ERA5, na.rm = TRUE)), 2),
+            p_value = cor.test(OBS - mean(OBS, na.rm = TRUE),
+                               ERA5 - mean(ERA5, na.rm = TRUE))$p.value < 0.05) %>%
+  filter(abs(bias_era5) < maximum_bias, p_value == TRUE)
 
 # Summary table for large regions - copy-paste this into latex main.tex
 dfx_to_table <- df_to_compare %>%
