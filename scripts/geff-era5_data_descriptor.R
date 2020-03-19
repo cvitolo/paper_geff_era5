@@ -13,6 +13,8 @@ library("raster")
 library("dplyr")
 library("leaflet")
 library("ggplot2")
+library("httr")
+library("lubridate")
 
 # GET DATA FROM GFWED, ERAI AND ERA5 FOR 2017 ##################################
 
@@ -92,7 +94,7 @@ for (myHour in seq(0, 23, 1)){
                       body = params)
 
       # Extract table (if available)
-      x <- try(expr = read.table(text = content(y, "text", encoding = "utf-8"),
+      x <- try(expr = read.table(text = httr::content(y, "text", encoding = "utf-8"),
                                  sep = " "),
                silent = TRUE)
       if (class(x) != "try-error"){
