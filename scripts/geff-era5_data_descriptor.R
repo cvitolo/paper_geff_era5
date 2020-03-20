@@ -1,20 +1,13 @@
-# INSTALL AND LOAD PACKAGES ####################################################
-packs <- c("cffdrs", "leaflet", "ggplot2", "dplyr", "raster", "rgeos",
-           "sp", "lubridate", "httr", "rgdal", "ggmap", "gridExtra", "viridis",
-           "lutz", "xtable")
-new.packages <- packs[!(packs %in% installed.packages()[,"Package"])]
-if(length(new.packages)) install.packages(new.packages)
-lapply(packs, require, character.only = TRUE)
-rm(packs, new.packages)
+# LOAD PACKAGES ################################################################
 
-# devtools::install_github('kongdd/Ipaper')
-library("Ipaper")
 library("raster")
 library("dplyr")
 library("leaflet")
 library("ggplot2")
 library("httr")
 library("lubridate")
+library("ggmap")
+library("colorspace")
 
 # GET DATA FROM GFWED, ERAI AND ERA5 FOR 2017 ##################################
 
@@ -302,13 +295,13 @@ rm(list = ls())
 
 # Data validation: comparison with observed FWI, ERAI and GFWED
 
-df <- readRDS("data/df_geff_erai_gfwed_era5.rds")
+df_used <- readRDS("data/df_geff_erai_gfwed_era5.rds")
 
 minimum_size <- 1
 maximum_bias <- 250
 scaling_function <- function(x) {sqrt(x)}
 
-df_to_map_era5 <- df %>%
+df_to_map_era5 <- df_used %>%
   # Split tzid into region and subregion
   mutate(region = sapply(strsplit(tzid, "/"), `[`, 1),
          subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
@@ -325,7 +318,7 @@ df_to_map_era5 <- df %>%
             gfwed = round(mean(GFWED, na.rm = TRUE), 2),
             era5 = round(mean(ERA5, na.rm = TRUE), 2),
             # Bias and Anomaly correlation (and p-values)
-            bias_era5 = round(mean(OBS - ERA5, na.rm = TRUE), 2),
+            bias_era5 = round(mean(ERA5 - OBS, na.rm = TRUE), 2),
             ac_era5 = round(cor(OBS - mean(OBS, na.rm = TRUE),
                                 ERA5 - mean(ERA5, na.rm = TRUE)), 2),
             p_value = cor.test(OBS - mean(OBS, na.rm = TRUE),
@@ -375,7 +368,7 @@ leaflet(data = df_to_map_era5) %>%
 
 ############################# TABLE 1 ##########################################
 
-df_to_compare <- df %>%
+df_to_compare <- df_used %>%
   # Split tzid into region and subregion
   mutate(region = sapply(strsplit(tzid, "/"), `[`, 1),
          subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
@@ -393,18 +386,23 @@ df_to_compare <- df %>%
             gfwed = round(mean(GFWED, na.rm = TRUE), 2),
             era5 = round(mean(ERA5, na.rm = TRUE), 2),
             # Bias and Anomaly correlation by time, id and season
-            bias_erai = round(mean(OBS - ERAI, na.rm = TRUE), 2),
-            bias_gfwed = round(mean(OBS - GFWED, na.rm = TRUE), 2),
-            bias_era5 = round(mean(OBS - ERA5, na.rm = TRUE), 2),
+            bias_erai = round(mean(ERAI - OBS, na.rm = TRUE), 2),
+            bias_gfwed = round(mean(GFWED - OBS, na.rm = TRUE), 2),
+            bias_era5 = round(mean(ERA5 - OBS, na.rm = TRUE), 2),
             ac_erai = round(cor(OBS - mean(OBS, na.rm = TRUE),
                                 ERAI - mean(ERAI, na.rm = TRUE)), 2),
             ac_gfwed = round(cor(OBS - mean(OBS, na.rm = TRUE),
                                  GFWED - mean(GFWED, na.rm = TRUE)), 2),
             ac_era5 = round(cor(OBS - mean(OBS, na.rm = TRUE),
                                 ERA5 - mean(ERA5, na.rm = TRUE)), 2),
-            p_value = cor.test(OBS - mean(OBS, na.rm = TRUE),
-                               ERA5 - mean(ERA5, na.rm = TRUE))$p.value < 0.05) %>%
-  filter(abs(bias_era5) < maximum_bias, p_value == TRUE)
+            p_value_erai = cor.test(OBS - mean(OBS, na.rm = TRUE),
+                                    ERAI - mean(ERAI, na.rm = TRUE))$p.value < 0.05,
+            p_value_gfwed = cor.test(OBS - mean(OBS, na.rm = TRUE),
+                                     GFWED - mean(GFWED, na.rm = TRUE))$p.value < 0.05,
+            p_value_era5 = cor.test(OBS - mean(OBS, na.rm = TRUE),
+                                    ERA5 - mean(ERA5, na.rm = TRUE))$p.value < 0.05) %>%
+  filter(abs(bias_era5) < maximum_bias,
+         p_value_erai == TRUE, p_value_gfwed == TRUE, p_value_era5 == TRUE)
 
 # Summary table for large regions - copy-paste this into latex main.tex
 dfx_to_table <- df_to_compare %>%
@@ -426,43 +424,32 @@ x <- reshape2::melt(data = df_to_compare[, c("region", "obs",
                                              "erai", "gfwed", "era5")],
                     id.vars = "region")
 
-# Boxplots by regions
-ggplot(x, aes(x=variable, y=value, fill = region)) +
-  Ipaper::geom_boxplot2(outlier.shape = NA, width = 0.8, width.errorbar = 0.5) +
+means <- aggregate(value ~  variable + region, x, mean)
+
+ggplot(x, aes(x = variable, y = value)) +
+  geom_boxplot(outlier.shape = NA, width = 0.8) +
+  geom_point(data = means, aes(x = variable, y = value), col = "red") +
+  #geom_text(data = means, aes(label = round(value), y = 0), col = "red") +
   facet_wrap(~region, scales = "free_y") +
   xlab("") + ylab("FWI") + theme_bw() +
-  theme(text = element_text(size=20)) +
-  scale_fill_discrete(name = "Region", h = c(0, 360), c = 80, l = 60) +
-  theme(legend.position = "none") +
-  scale_x_discrete(#breaks=c("0.5","1","2"),
-                   labels=c("OBS", "ERAI", "GFWED", "ERA5"))
+  scale_x_discrete(labels=c("OBS", "ERAI", "GFWED", "ERA5")) +
+  theme(text = element_text(size=20), legend.position = "none")
+
+# Calculate median for Atlantic
+x %>% filter(region == "Atlantic") %>%
+  group_by(variable) %>%
+  summarise(meanFWI = median(value))
+
+# Calculate mean for Atlantic
+x %>% filter(region == "Atlantic") %>%
+  group_by(variable) %>%
+  summarise(meanFWI = mean(value))
 
 rm(list = ls())
 
 ############################# FIGURE 4 #########################################
 
-# These are all the synop stations
-df <- readRDS("data/df_geff_erai_gfwed_era5.rds")
-
-df$season <- "Wet"
-df$season[df$lat < 30 & df$lat > -30] <- "Dry"
-df$season[df$lat > 30 & df$mon %in% 4:9] <- "Dry"
-df$season[df$lat < -30 & df$mon %in% c(1:3, 10:12)] <- "Dry"
-
-dfx_points <- df %>%
-  filter(season == "Dry") %>%
-  # Remove oddly high values
-  filter(OBS <= 150) %>%
-  na.omit %>%
-  mutate(region = sapply(strsplit(tzid, "/"), `[`, 1),
-         subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
-  filter(region != "Etc") %>%
-  mutate(date = as.Date(paste(yr, mon, day, sep = "-"))) %>%
-  dplyr::select(lat, long, region, date, OBS, ERA5)
-
-rm(df)
-
-df <- data.frame(matrix(NA, nrow = 0, ncol = 16))
+df_ens <- data.frame(matrix(NA, nrow = 0, ncol = 16))
 dates_2017 <- seq.Date(from = as.Date("2017-01-01"),
                        to = as.Date("2017-12-31"),
                        by = "day")
@@ -475,7 +462,7 @@ for (i in seq_along(dates_2017)){
   era5 <- raster::stack()
   for (ens_member in 0:9){
     era5 <- raster::stack(era5,
-                          file.path("/scratch/rd/nen/perClaudia/era5/ens/fwi",
+                          file.path("/hugetmp/reanalysis/GEFF-ERA5/ens",
                                     paste0("ECMWF_FWI_",
                                            gsub("-", "", one_date),
                                            "_1200_0", ens_member, "_fwi.nc")))
@@ -493,65 +480,40 @@ for (i in seq_along(dates_2017)){
 
   x <- as.data.frame(dfx_date)
   x <- x[complete.cases(x),]
-  df <- rbind(df, x)
+  df_ens <- rbind(df_ens, x)
 
 }
 
-df_melt <- df %>%
+saveRDS(df_ens, "data/df_ens.rds")
+
+df_melt <- df_ens %>%
   reshape2::melt(id.vars = c("region", "lat", "long", "date", "OBS", "ERA5"))
 
 ggplot(df_melt) +
   facet_wrap(~region, ncol = 4, scale = "free") +
-  # ENS
-  stat_ecdf(aes(x = value, colour = region, group = variable)) +
-  # ERA5
-  stat_ecdf(aes(x = ERA5, linetype = "Reanalysis"), lwd = 0.5) +
   # OBS
   stat_ecdf(aes(x = OBS, linetype = "Observations"), lwd = 0.5) +
+  # ERA5
+  stat_ecdf(aes(x = ERA5, linetype = "HRES Reanalysis"), lwd = 0.5) +
+  # ENS
+  stat_ecdf(aes(x = value, colour = region, group = variable)) +
   scale_linetype_discrete(name = "") +
   theme(text = element_text(size=20)) +
   xlab("") + ylab("") + xlim(0, 100) + ylim(0.5, 1) +
-  scale_colour_discrete(name = "Ensemble", h = c(0, 360), c = 80, l = 60)
-
-# OTHER TESTS
-
-set.seed(0)
-dfx_points_sampled <- dfx_points %>%
-  group_by(region) %>%
-  sample_n(1)
-
-df_points_melt <- df_points_sampled %>%
-  reshape2::melt(id.vars = c("region", "lat", "long", "date", "OBS", "ERA5"))
-
-ggplot(df_points_melt) +
-  stat_ecdf(aes(x=value, colour = region)) +
-  stat_ecdf(aes(x=ERA5), lwd=0.5, linetype="dotted") +
-  stat_ecdf(aes(x=OBS), lwd=0.5) +
-  facet_grid(~region, scale = "free") +
-  scale_colour_discrete(name = "Region")
-
-# Boxplots by regions
-ggplot(df_points_melt) +
-  geom_boxplot(aes(1, value), outlier.shape = NA) +
-  geom_point(aes(1, ERA5), shape = 1, size = 2) +
-  geom_point(aes(1, OBS), shape = 5, size = 2) +
-  facet_wrap(~region, scales = "free_y") +
-  xlab("") + ylab("") + theme_bw() +
-  theme(text = element_text(size=20),
-        axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank())
+  scale_colour_discrete(name = "ENS Reanalysis", h = c(0, 360), c = 80, l = 60)
 
 # Comparison with ENSO #########################################################
 
 # Crop reanalysis over SE Asia
-system("cdo sellonlatbox,90,132,-14,21 /scratch/rd/nen/perClaudia/era5/fwi.nc data/fwi_era5_seasia.nc")
+system("cdo sellonlatbox,90,132,-14,21 /scratch/rd/nen/perClaudia/era5/fwi_1980_2019.nc /perm/mo/moc0/repos/GEFF-ERA5/data/fwi_era5_seasia.nc")
+
 r <- brick("data/fwi_era5_seasia.nc")
 seasia_clima_98 <- caliver::daily_clima(r, probs = 0.98)
-# writeRaster(seasia_clima_98, filename = "data/clima_98_seasia.nc",
-#             format = "CDF", overwrite = TRUE)
+writeRaster(seasia_clima_98, filename = "data/clima_98_seasia.nc",
+            format = "CDF", overwrite = TRUE)
+
 days_above_98 <- stack()
-for (myyear in 1980:2018){ # myyear <- 1980
+for (myyear in 1980:2018){
   print(myyear)
   if (lubridate::leap_year(myyear)){
     day_indices <- 1:366
@@ -563,66 +525,30 @@ for (myyear in 1980:2018){ # myyear <- 1980
   days_above_98thp <- calc(r_year > seasia_clima_98[[day_indices]], sum)
   days_above_98 <- stack(days_above_98, days_above_98thp)
 }
-# writeRaster(days_above_98, filename = "data/days_above_98_seasia.nc",
-#             format = "CDF", overwrite = TRUE)
+writeRaster(days_above_98, filename = "data/days_above_98_seasia.nc",
+            format = "CDF", overwrite = TRUE)
 
-p98 <- na.omit(setNames(as.data.frame(days_above_98), 1980:2018)); p98$P <- 98
-df <- reshape2::melt(p98, id.vars = "P")
-df$P <- as.factor(df$P)
-df$col <- ifelse(df$variable %in% c(1982, 1983, 1997, 1998, 2015, 2016,
-                                    1987, 1988, 1991, 1992), "red",
-                 ifelse(df$variable %in% c(1988, 1989, 1999, 2000, 2007, 2008,
-                                           2010, 2011), "blue", "gray"))
-df$alph <- ifelse(df$variable %in% c(1982, 1983, 1997, 1998, 2015, 2016, 1988,
-                                     1989, 1999, 2000, 2007, 2008, 2010, 2011),
-                  0.5, 0.1)
 # https://ggweather.com/enso/oni.htm
-vstrong_nino <- c(1982, 1983, 1997, 1998, 2015, 2016)
-strong_nino <- c(1987, 1988, 1991, 1992)
-mod_nino <- c(1986, 1994, 2002)
-weak_nino <- c(2004, 2014, 2018)
-strong_nina <- c(1989, 1999, 2000, 2007, 2008, 2010, 2011)
-mod_nina <- c(1995, 1996, 2012)
-weak_nina <- c(1984, 1985, 2001, 2005, 2006, 2009)
-df$Intensities <- ifelse(df$variable %in% vstrong_nino, "Very Strong El Nino",
-                         ifelse(df$variable %in% strong_nino,
-                                "Strong El Nino",
-                                ifelse(df$variable %in% mod_nino,
-                                       "Moderate El Nino",
-                                       ifelse(df$variable %in% strong_nina,
-                                              "Strong La Nina",
-                                              ifelse(df$variable %in% mod_nina,
-                                                     "Moderate La Nina",
-                                                     "Weak (either)")))))
-df$Intensities <- as.factor(x = df$Intensities)
-levels(df$Intensities) <- c("Very Strong El Nino", "Strong El Nino",
-                            "Moderate El Nino", "Strong La Nina",
-                            "Moderate La Nina", "Weak (either)")
-
-# ggplot(df, aes(x = value, y = P, color = variable, alpha = alph), size = 0.1) +
-#   geom_point() + geom_jitter() +
-#   scale_color_manual(name = "Year",
-#                      values=c(rep("lightgray", 2), rep("red", 2),
-#                               rep("lightgray", 4), rep("blue", 2),
-#                               rep("lightgray", 7), rep("red", 2),
-#                               rep("blue", 2), rep("lightgray", 6),
-#                               rep("blue", 2), rep("lightgray", 1),
-#                               rep("blue", 2), rep("lightgray", 3),
-#                               rep("red", 2), rep("lightgray", 2))) +
-#   scale_alpha(guide = "none") + xlab("") + ylab("Percentile") + theme_bw() +
-#   ggtitle("SE Asia")
-#
-# ggplot(df, aes(y = value, x = P, fill = Intensities)) +
-#   geom_boxplot() + xlab("Percentile") + ylab("") + theme_bw() +
-#   ggtitle("SE Asia") + coord_flip()
+df_ens <- na.omit(setNames(as.data.frame(days_above_98), 1980:2018)) %>%
+  mutate(P = 98) %>%
+  reshape2::melt(id.vars = "P") %>%
+  mutate(P = as.factor(P),
+         col = ifelse(variable %in% c(1982, 1983, 1997, 1998, 2015),
+                      "red",
+                      ifelse(variable %in% c(1988, 1989, 1999, 2000,
+                                             2007, 2008, 2010, 2011), "blue",
+                             "gray")),
+         alph = ifelse(variable %in% c(1982, 1983, 1988, 1989, 1997, 1998, 1999,
+                                       2000, 2007, 2008, 2010, 2011, 2015),
+                       0.5, 0.1))
 
 ############################# FIGURE 5 #########################################
 
-ggplot(df, aes(x=variable, y=value, fill = col)) +
+ggplot(df_ens, aes(x = variable, y = value, fill = col)) +
   geom_boxplot(outlier.alpha = 0) +
-  theme(text = element_text(size=15),
-        axis.text.x = element_text(angle = 90)) +
-  xlab("") + ylab("Number of days above threshold") + ylim(0, 60) +
+  theme(text = element_text(size = 20),
+        axis.text.x = element_text(angle = 90, vjust = 0.5)) +
+  xlab("") + ylab("Number of days above 98th percentile") + ylim(0, 60) +
   scale_fill_manual(name = "",
                     labels = c("La Nina", "Either", "El Nino"),
                     breaks = c("blue", "gray", "red"),
@@ -641,31 +567,37 @@ myplot <- ggmap(myMap) + xlab("Longitude") + ylab("Latitude") +
   theme(plot.title = element_text(hjust = 0.5))
 
 # For year 1997
-rtp <- rasterToPolygons(days_above_98[[18]])
-names(rtp) <- "layer"
-rtp$layer <- cut(rtp$layer, seq(0,100,10), include.lowest=T)
+rtp_1997 <- rasterToPolygons(days_above_98[[18]])
+names(rtp_1997) <- "layer"
+common_max <- max(rtp_1997$layer) + 10
+rtp_1997$layer <- cut(rtp_1997$layer, seq(0, common_max, 10),
+                      include.lowest = TRUE)
+# For year 2010
+rtp_2010 <- rasterToPolygons(days_above_98[[31]])
+names(rtp_2010) <- "layer"
+rtp_2010$layer <- cut(rtp_2010$layer, seq(0, common_max, 10),
+                      include.lowest = TRUE)
+
+# Choose palette
+common_palette <- colorspace::sequential_hcl(12, palette = "RedYellow",
+                                             rev = TRUE)
 
 myplot + ggtitle("1997") +
-  geom_polygon(data = rtp,
+  geom_polygon(data = rtp_1997,
                aes(x = long, y = lat, group = group,
-                   fill = rep(rtp$layer, each = 5)),
-               size = 0, alpha = 0.5) +
-  scale_fill_manual(name = "Number of days\nabove threshold",
-                    values = c("gray20", "gray40", "gray60", "gray80", "yellow",
-                               "green", "cyan", "blue", "red", "darkred"),
-                    drop = FALSE)
-
-# For year 2010
-rtp <- rasterToPolygons(days_above_98[[31]])
-names(rtp) <- "layer"
-rtp$layer <- cut(rtp$layer, seq(0,100,10), include.lowest=T)
+                   fill = rep(rtp_1997$layer, each = 5)),
+               size = 0, alpha = 0.7) +
+  scale_fill_manual(name = "Number of days\nabove 98th\npercentile",
+                    values = common_palette,
+                    drop = FALSE) +
+  theme(text = element_text(size=20))
 
 myplot + ggtitle("2010") +
-  geom_polygon(data = rtp,
+  geom_polygon(data = rtp_2010,
                aes(x = long, y = lat, group = group,
-                   fill = rep(rtp$layer, each = 5)),
-               size = 0, alpha = 0.5) +
-  scale_fill_manual(name = "Number of days\nabove threshold",
-                    values = c("gray20", "gray40", "gray60", "gray80", "yellow",
-                               "green", "cyan", "blue", "red", "darkred"),
-                    drop = FALSE)
+                   fill = rep(rtp_2010$layer, each = 5)),
+               size = 0, alpha = 0.7) +
+  scale_fill_manual(name = "Number of days\nabove 98th\npercentile",
+                    values = common_palette,
+                    drop = FALSE) +
+  theme(text = element_text(size=20))
