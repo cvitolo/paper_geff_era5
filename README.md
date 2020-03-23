@@ -5,7 +5,7 @@
 
 This repository contains the scripts to reproduce the content of the GEFF-ERA5 data descriptor:
 
-Vitolo C., Di Giuseppe F., Barnard C., Coughlan R., San-Miguel-Ayanz J., Liberta' G., Krzeminski B. (in preparation). ERA5-based global meteorological wildfire danger maps. Scientific data
+Vitolo C., Di Giuseppe F., Barnard C., Coughlan R., San-Miguel-Ayanz J., Liberta' G., Krzeminski B. (under review). ERA5-based global meteorological wildfire danger maps. Scientific data
 
 The scripts folder contains:
 
