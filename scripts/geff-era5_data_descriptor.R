@@ -8,6 +8,7 @@ library("httr")
 library("lubridate")
 library("ggmap")
 library("colorspace")
+library("htmlwidgets")
 
 # GET DATA FROM GFWED, ERAI AND ERA5 FOR 2017 ##################################
 
@@ -340,7 +341,7 @@ pal <- colorFactor(palette = c("grey", "navy", "red"),
                    domain = df_to_map_era5$color)
 
 # Check locations on interactive map
-leaflet(data = df_to_map_era5) %>%
+m <- leaflet(data = df_to_map_era5) %>%
   addProviderTiles(providers$CartoDB.Positron) %>% # addTiles()
   addCircleMarkers(~long, ~lat,
                    radius = ~radius,
@@ -365,6 +366,7 @@ leaflet(data = df_to_map_era5) %>%
   )
 
 # PUBLISH ON RPUBS THE INTERACTIVE MAP, THEN TAKE A SCREENSHOT FOR THE PAPER
+saveWidget(m, file = "GEFF-ERA5_2017_diagnostic_map.html", selfcontained = F)
 
 ############################# TABLE 1 ##########################################
 
