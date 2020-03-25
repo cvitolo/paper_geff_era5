@@ -366,7 +366,7 @@ m <- leaflet(data = df_to_map_era5) %>%
   )
 
 # PUBLISH ON RPUBS THE INTERACTIVE MAP, THEN TAKE A SCREENSHOT FOR THE PAPER
-saveWidget(m, file = "GEFF-ERA5_2017_diagnostic_map.html", selfcontained = F)
+saveWidget(m, file = "GEFF-ERA5_2017_diagnostic_map.html", selfcontained = TRUE)
 
 ############################# TABLE 1 ##########################################
 
