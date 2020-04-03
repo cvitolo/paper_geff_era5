@@ -577,7 +577,8 @@ means <- aggregate(value ~  variable + region, x, mean)
 
 p <- ggplot(x, aes(x = variable, y = value)) +
   geom_boxplot(outlier.shape = NA, width = 0.8) +
-  geom_point(data = means, aes(x = variable, y = value), col = "red") +
+  geom_point(data = means, aes(x = variable, y = value),
+             shape = 21, colour = "black", fill = "white") + #col = "red"
   facet_wrap(~region, scales = "free_y") +
   xlab("") + ylab("FWI") + theme_bw() +
   scale_x_discrete(labels = c("OBS", "ERAI", "GFWED", "ERA5")) +
