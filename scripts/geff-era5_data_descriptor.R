@@ -586,7 +586,7 @@ p <- ggplot(x, aes(x = variable, y = value)) +
 ggsave(filename = "images/boxplots.eps",
        plot = p,
        device = "eps",
-       width = 500,
+       width = 300,
        height = 250,
        units = "mm",
        dpi = 300)
