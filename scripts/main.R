@@ -1,16 +1,8 @@
 # LOAD PACKAGES ################################################################
 
 library("raster")
-# library("caliver")
-# library("dplyr")
-# library("leaflet")
-# library("ggplot2")
-# library("httr")
-# library("lubridate")
-# library("ggmap")
-# library("colorspace")
-# library("htmlwidgets")
-# library("lutz")
+library("rnaturalearthdata")
+library("colorspace")
 
 # Get data from GFWED, ERAI AND ERA5 for year 2017 #############################
 
@@ -125,76 +117,38 @@ writeRaster(ac_era5_gfwed_masked,
 
 ############################# FIGURE 2 #########################################
 
-library("raster")
-library("rnaturalearth")
-library("rnaturalearthdata")
-library("colorspace")
+bias_gfwed <- raster("data/mean_bias_era5_gfwed.nc")
+bias_erai <- raster("data/mean_bias_era5_erai.nc")
+ac_gfwed <- raster("data/ac_era5_gfwed_masked.nc")
+ac_erai <- raster("data/ac_era5_erai_masked.nc")
 
-bias_era5_gfwed <- raster("data/mean_bias_era5_gfwed.nc")
-bias_era5_erai <- raster("data/mean_bias_era5_erai.nc")
-ac_era5_gfwed <- raster("data/ac_era5_gfwed_masked.nc")
-ac_era5_erai <- raster("data/ac_era5_erai_masked.nc")
+errors <- stack(bias_gfwed, bias_erai, ac_gfwed, ac_erai)
+names(errors) <- c("bias_gfwed", "bias_erai", "ac_gfwed", "ac_erai")
 
-climate_map <- raster("/perm/mo/moc0/Beck_KG_V1/Beck_KG_V1_present_0p5.tif")
-climate_map_remapped <- resample(x = climate_map, y = bias_era5_gfwed, method = "ngb")
-code = c("Af   Tropical, rainforest",
-               "Am   Tropical, monsoon",
-               "Aw   Tropical, savannah",
-               "BWh  Arid, desert, hot",
-               "BWk  Arid, desert, cold",
-               "BSh  Arid, steppe, hot",
-               "BSk  Arid, steppe, cold",
-               "Csa  Temperate, dry summer, hot summer",
-               "Csb  Temperate, dry summer, warm summer",
-               "Csc  Temperate, dry summer, cold summer",
-               "Cwa  Temperate, dry winter, hot summer",
-               "Cwb  Temperate, dry winter, warm summer",
-               "Cwc  Temperate, dry winter, cold summer",
-               "Cfa  Temperate, no dry season, hot summer",
-               "Cfb  Temperate, no dry season, warm summer",
-               "Cfc  Temperate, no dry season, cold summer",
-               "Dsa  Cold, dry summer, hot summer",
-               "Dsb  Cold, dry summer, warm summer",
-               "Dsc  Cold, dry summer, cold summer",
-               "Dsd  Cold, dry summer, very cold winter",
-               "Dwa  Cold, dry winter, hot summer",
-               "Dwb  Cold, dry winter, warm summer",
-               "Dwc  Cold, dry winter, cold summer",
-               "Dwd  Cold, dry winter, very cold winter",
-               "Dfa  Cold, no dry season, hot summer",
-               "Dfb  Cold, no dry season, warm summer",
-               "Dfc  Cold, no dry season, cold summer",
-               "Dfd  Cold, no dry season, very cold winter",
-               "ET   Polar, tundra",
-               "EF   Polar, frost")
-climate_legend <- data.frame(zone = 1:30, code)
-
-# MEAN
-func <- "mean"
-df_bias_era5_gfwed <- data.frame(zonal(x = bias_era5_gfwed,
-                                       z = climate_map_remapped, func))
-names(df_bias_era5_gfwed)[2] <- "bias_era5_gfwed"
-df_bias_era5_erai <- data.frame(zonal(x = bias_era5_erai,
-                                      z = climate_map_remapped, func))
-names(df_bias_era5_erai)[2] <- "bias_era5_erai"
-df_ac_era5_gfwed <- data.frame(zonal(x = ac_era5_gfwed,
-                                     z = climate_map_remapped, func))
-names(df_ac_era5_gfwed)[2] <- "ac_era5_gfwed"
-df_ac_era5_erai <- data.frame(zonal(x = ac_era5_erai,
-                                    z = climate_map_remapped, func))
-names(df_ac_era5_erai)[2] <- "ac_era5_erai"
-x <- merge(df_bias_era5_gfwed, climate_legend, by = "zone", all = TRUE)
-x <- merge(x, df_bias_era5_erai, by = "zone", all = TRUE)
-x <- merge(x, df_ac_era5_gfwed, by = "zone", all = TRUE)
-x <- merge(x, df_ac_era5_erai, by = "zone", all = TRUE)
-x <- x[complete.cases(x), ]
-print(xtable::xtable(x = x[, c(1, 3, 2, 4, 5, 6)], caption = "Validation"),
+gfed <- readRDS("data/GFED4_BasisRegions.rds")
+df <- data.frame(zonal(x = errors, z = rasterize(x = gfed, y = errors[[1]])))
+df$Region <- c("Boreal North America",
+               "Temperate North America",
+               "Central America",
+               "North Hemisphere South America",
+               "South Hemisphere South America",
+               "Europe",
+               "Middle East",
+               "North Hemisphere Africa",
+               "South Hemisphere Africa",
+               "Boreal Asia",
+               "Central Asia",
+               "Southeast Asia",
+               "Equatorial Asia",
+               "Australia and New Zealand")
+df$Region_short <- gfed@data$Region
+print(xtable::xtable(x = df[, c(6, 2:5)], caption = "Validation"),
       include.rownames = FALSE)
 
 # Set up breaks
 breaks_bias <- c(-60, -30, -15, -10, -5, 5, 10, 15, 30, 60)
 breaks_ac <- c(-1, -0.6, -0.2, 0, 0.2, 0.6, 1)
-# Set up palettes (Bias = Broc, AC = Oslo)
+# Set up palettes
 pal_bias <- rev(colorspace::diverge_hcl(length(breaks_bias) - 1, palette = "Blue-Red"))
 pal_ac <- colorspace::sequential_hcl(length(breaks_ac) - 1, palette = "Inferno")
 
@@ -203,11 +157,12 @@ ratioWH <- 1.77
 W <- 10
 H <- W/ratioWH
 
-cairo_ps("images/bias_era5_erai.eps", width = W, height = H)
-plot(bias_era5_erai, breaks = breaks_bias,
-     main = "(a) ERA5 vs ERAI",
+cairo_ps("images/bias_erai.eps", width = W, height = H)
+plot(bias_erai, breaks = breaks_bias, main = "(a) ERA5 vs ERAI",
      col = pal_bias, legend = FALSE)
 plot(coastline110, add = TRUE)
+#plot(gfed, add = TRUE, lwd = 0.5)
+#rgeos::polygonsLabel(gfed, gfed@data$Region, method = "buffer", cex = 0.8)
 legend("bottomleft", horiz = FALSE, inset = 0.01, title = "Mean bias",
        fill = pal_bias, border = "gray", box.col = NA,
        legend = c("[-60, -30[", "[-30, -15[", "[-15, -10[", "[-10, -5[",
@@ -216,7 +171,7 @@ legend("bottomleft", horiz = FALSE, inset = 0.01, title = "Mean bias",
 dev.off()
 
 cairo_ps("images/bias_era5_gfwed.eps", width = W, height = H)
-plot(bias_era5_gfwed, breaks = breaks_bias,
+plot(bias_gfwed, breaks = breaks_bias,
      main = "(b) ERA5 vs GFWED",
      col = pal_bias, legend = FALSE)
 plot(coastline110, add = TRUE)
@@ -227,8 +182,8 @@ legend("bottomleft", horiz = FALSE, inset = 0.01, title = "Mean bias",
                   "[+5, +10[", "[+10, +15[", "[+15, +30[", "[+30, +60]"))
 dev.off()
 
-cairo_ps("images/ac_era5_erai.eps", width = W, height = H)
-plot(ac_era5_erai, breaks = breaks_ac,
+cairo_ps("images/ac_erai.eps", width = W, height = H)
+plot(ac_erai, breaks = breaks_ac,
      main = "(a) ERA5 vs ERAI",
      col = pal_ac, legend = FALSE)
 plot(coastline110, add = TRUE)
@@ -239,8 +194,8 @@ legend("bottomleft", horiz = FALSE, inset = 0.01, title = "Anomaly correlation",
                   "[+0.2, +0.6[", "[+0.6, +1.0]"))
 dev.off()
 
-cairo_ps("images/ac_era5_gfwed.eps", width = W, height = H)
-plot(ac_era5_gfwed, breaks = breaks_ac,
+cairo_ps("images/ac_gfwed.eps", width = W, height = H)
+plot(ac_gfwed, breaks = breaks_ac,
      main = "(b) ERA5 vs GFWED",
      col = pal_ac, legend = FALSE)
 plot(coastline110, add = TRUE)
@@ -250,89 +205,6 @@ legend("bottomleft", horiz = FALSE, inset = 0.01, title = "Anomaly correlation",
                   "[-0.2, 0[", "[0, +0.2[",
                   "[+0.2, +0.6[", "[+0.6, +1.0]"))
 dev.off()
-
-# INTERACTIVE FIGURES
-library(leaflet)
-
-# Bias GFWED
-library("mapview")
-mapview::mapview(c(bias_era5_gfwed, climate_map))
-
-mapview::mapview(bias_era5_gfwed, at = breaks_bias, col.regions = pal_bias,
-                 alpha.regions = 0.5, map.types = mapviewGetOption("OpenTopoMap"))
-
-leaflet() %>%
-  addProviderTiles(providers$CartoDB.Positron, group = "CartoDB (default)") %>%
-  addProviderTiles(providers$OpenTopoMap, group = "OpenTopoMap") %>%
-  addRasterImage(bias_era5_gfwed,
-                 colors = colorBin(palette = pal_bias,
-                                   bins = breaks_bias,
-                                   na.color = "transparent"),
-                 opacity = 0.5, group = "mean_bias_era5_gfwed") %>%
-  addRasterImage(climate_map,
-                 group = "climate_map") %>%
-  addLayersControl(
-    baseGroups = c("CartoDB (default)", "OpenTopoMap"),
-    overlayGroups = c("mean_bias_era5_gfwed", "climate_map"),
-    options = layersControlOptions(collapsed = FALSE)
-  ) %>%
-  addMiniMap()
-
-# Bias ERAI
-leaflet() %>%
-  addProviderTiles(providers$CartoDB.Positron, group = "CartoDB (default)") %>%
-  addProviderTiles(providers$OpenTopoMap, group = "OpenTopoMap") %>%
-  addRasterImage(bias_era5_erai,
-                 colors = colorBin(palette = pal_bias,
-                                   bins = breaks_bias,
-                                   na.color = "transparent"),
-                 opacity = 0.5, group = "mean_bias_era5_erai") %>%
-  addRasterImage(climate_map,
-                 group = "climate_map") %>%
-  addLayersControl(
-    baseGroups = c("CartoDB (default)", "OpenTopoMap"),
-    overlayGroups = c("mean_bias_era5_erai", "climate_map"),
-    options = layersControlOptions(collapsed = FALSE)
-  ) %>%
-  addMiniMap() %>%
-  addLegend(pal = pal_bias,
-            values = values(bias_era5_erai),
-            title = "Mean bias ERA5 vs ERAI")
-
-# Check locations on interactive map
-m <- leaflet(data = df_era5_gfwed) %>%
-  # Base groups
-  addTiles() %>%
-  #addProviderTiles(providers$CartoDB.Positron, group = "CartoDB (default)") %>%
-  #addProviderTiles(providers$OpenTopoMap, group = "OpenTopoMap") %>%
-  addCircleMarkers(~x, ~y,
-                   color = ~pal(bias),
-                   fillOpacity = ~abs(1 - ac),
-                   stroke = FALSE,
-                   popup = ~paste("<strong>", "Bias:", "</strong>",
-                                  bias, "<br>",
-                                  "<strong>", "Anomaly correlation:",
-                                  "</strong>", ac, "<br>"),
-                   group = "Validation points") %>%
-  setMaxBounds(lng1 = -180, lat1 = -90, lng2 = 180, lat2 = 90) %>%
-  addLegend(position = "topright",
-            pal = pal,
-            title = "GEFF-ERA5 vs OBS",
-            values = ~color,
-            opacity = 1,
-            labFormat = function(type, cuts, p) {  # Here's the trick
-              paste0(labels)
-            }
-  ) %>%
-  # Layers control
-  addLayersControl(
-    baseGroups = c("CartoDB (default)", "OpenTopoMap"),
-    overlayGroups = "Validation points",
-    options = layersControlOptions(collapsed = FALSE)
-  )
-
-# PUBLISH ON RPUBS THE INTERACTIVE MAP, THEN TAKE A SCREENSHOT FOR THE PAPER
-saveWidget(m, file = "GEFF-ERA5_2017_diagnostic_map.html", selfcontained = TRUE)
 
 ############################# FIGURE 3 boxplots of regional distributions ######
 
@@ -427,7 +299,7 @@ ggplot(df_melt) +
 ############################# FIGURE 5: comparison with ENSO (boxplot) #########
 
 # Crop reanalysis over SE Asia
-system("cdo sellonlatbox,90,132,-14,21 /scratch/rd/nen/perClaudia/era5/fwi_1980_2019.nc /perm/mo/moc0/repos/GEFF-ERA5/data/fwi_era5_seasia.nc")
+system("cdo sellonlatbox,90,132,-14,21 /scratch/rd/nen/perClaudia/era5/fwi_1980_2019.nc /perm/mo/moc0/repos/GEFF-ERA5/data/fwi_seasia.nc")
 
 r <- brick("data/fwi_era5_seasia.nc")
 seasia_clima_98 <- caliver::daily_clima(r, probs = 0.98)
