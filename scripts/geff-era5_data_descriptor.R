@@ -1,6 +1,7 @@
 # LOAD PACKAGES ################################################################
 
 library("raster")
+library("caliver")
 library("dplyr")
 library("leaflet")
 library("ggplot2")
@@ -9,8 +10,9 @@ library("lubridate")
 library("ggmap")
 library("colorspace")
 library("htmlwidgets")
+library("lutz")
 
-# GET DATA FROM GFWED, ERAI AND ERA5 FOR 2017 ##################################
+# Get data from GFWED, ERAI AND ERA5 for year 2017 #############################
 
 # FWI based on GFWED
 myDates <- seq.Date(from = as.Date("2017-01-01"),
@@ -226,8 +228,6 @@ saveRDS(df, "data/df_all_stvl_R.rds")
 library("reticulate")
 reticulate::py_run_file("scripts/STVL_get_observations.py")
 
-# Add local time to the attributes, using lutz::tz_lookup_coords()
-
 for (i in 1:12){
 
   print(i)
@@ -235,115 +235,95 @@ for (i in 1:12){
   # Read data.frame
   df <- read.csv(paste0("/hugetmp/SYNOP/Observations_2017",
                         sprintf("%02d", i), ".csv"))
-  # Remove unecessary columns
-  df <- df[, -which(names(df) %in% c("X", "level", "elevation"))]
 
-  # Convert from long to wide format
-  spreadDF <- df %>% tidyr::pivot_wider(id_cols = names(df)[1:4],
-                                        names_from = param,
-                                        values_from = value_0)
-
-  if (all(c("10dd", "10ff", "2d", "2t", "tp") %in% names(spreadDF))) {
+  df <- df %>%
+    # Remove unecessary columns
+    select(-c("X", "level")) %>%
+    # Convert from long to wide format
+    tidyr::pivot_wider(names_from = param, values_from = value_0) %>%
     # Remove rows with incomplete records
-    df <- spreadDF %>% filter(complete.cases(`10dd`, `10ff`, `2d`, `2t`, `tp`))
-    rm(spreadDF)
+    filter(complete.cases(`tp`, `10ff`, `2t`, `2d`))
 
-    # Add time zone
-    df$tzid <- lutz::tz_lookup_coords(lat = df$latitude,
-                                      lon = df$longitude,
-                                      method = "accurate") # or method = "fast"
+  # Calculate relatively humidity from 2t and 2d
+  df$rh <- caliver:::relative_humidity(t2m = df$`2t`, d2m = df$`2d`)
 
+  df <- df %>%
+    # Rename columns to make them compatible with cffr::fwi() requirements
+    rename(id = stnid, lat = latitude, long = longitude) %>%
+    # Add timezone to the attributes, using lutz::tz_lookup_coords()
+    mutate(tzid = lutz::tz_lookup_coords(lat = lat,
+                                         lon = long, method = "accurate"),
+           timestamp_utc = as.POSIXct(date,
+                                      format = "%Y-%m-%d %H:%M",
+                                      tz = "UTC")) %>%
     # Remove records with NA tzid or timezone = "uninhabited"
-    temp <- which(is.na(df$tzid) | df$tzid == "uninhabited")
-    if (length(temp) > 0) {
-      df <- df[-temp, ]
-    }
+    filter(!is.na(tzid), tzid != "uninhabited") %>%
+    # UTC time as needed by lubridate::with_tz()
+    mutate(local_time = lubridate::hour(lubridate::with_tz(timestamp_utc,
+                                                           tzid))) %>%
+    # Remove records with NA local, and keep records at 11-13 local time
+    # this is to capture noon local time even with Daylight Saving Time
+    filter(!is.na(local_time), local_time %in% 11:13) %>%
+    # Convert to match cffdrs::fwi() requirements
+    mutate(temp = `2t` - 273.15,
+           dew = `2d` - 273.15,
+           ws = `10ff` * 3.6,
+           yr = lubridate::year(date),
+           mon = lubridate::month(date),
+           day = lubridate::day(date)) %>%
+    group_by(id, lat, long, tzid, yr, mon, day) %>%
+    # Average over the 11-13 time window
+    summarise(temp = last(temp), dew = last(dew),
+              prec = last(tp), rh = last(rh), ws = last(ws))
 
-    # UTC time as needed by with_tz()
-    df$timestamp_utc <- as.POSIXct(df$date,
-                                   format = "%Y-%m-%d %H:%M", tz = "UTC")
-
-    df <- df %>%
-      mutate(local_time = hour(with_tz(timestamp_utc, tzid)))
-
-    # Remove records with NA local time
-    temp <- which(is.na(df$local_time))
-    if (length(temp) > 0) {
-      df <- df[-temp, ]
-    }
-
-    # Keep only records corresponding to 11-13
-    # This is to capture noon local time even with Daylight Saving Time
-    temp <- which(df$local_time %in% 11:13)
-    if (length(temp) > 0) {
-      df <- df[temp, ]
-
-      # Calculate relative humidity
-      df$rh <- caliver:::relative_humidity(t2m = df$`2t`, d2m = df$`2d`)
-
-      # Convert to match cffdrs::fwi() requirements
-      df$`2d` <- df$`2d` - 273.15
-      df$`2t` <- df$`2t` - 273.15
-      df$ws <- df$`10ff` * 3.6
-      df$yr <- lubridate::year(df$date)
-      df$mon <- lubridate::month(df$date)
-      df$day <- lubridate::day(df$date)
-
-      names(df)[1:3] <- c("id", "lat", "long")
-
-      if (exists("df_all")){
-        df_all <- rbind(df_all, df)
-      }else{
-        df_all <- df
-      }
-
-      print(paste("records:", dim(df_all)[1]))
-
-    } else {
-      message("No data for this month")
-    }
-
+  if (exists("df_all_months")){
+    df_all_months <- rbind(df_all_months, df)
+  }else{
+    df_all_months <- df
   }
 
 }
 
-# # Average over the 11-13 time window
-df <- df_all %>%
-  group_by(id, lat, long, tzid, yr, mon, day) %>%
-  summarise(temp = last(`2t`), prec = last(tp), rh = last(rh), ws = last(ws))
+saveRDS(df_all_months, "data/df_all_months_stvl_python_365.rds")
+# df_all_months <- readRDS("data/df_all_months_stvl_python.rds")
 
 # Cleanup
+df_all_months <- df_all_months %>% mutate(fixed = FALSE)
 
-summary(df$lat)
-summary(df$long)
+summary(df_all_months$lat)
+summary(df_all_months$long)
 
-summary(df$temp) # Temperatures exceed the highest value ever recorded!
-plot(density(df$temp))
-df$temp[which(df$temp > 56.7)] <- NA # Remove
-df <- df[!is.na(df$temp), ]
-plot(density(df$temp))
+summary(df_all_months$prec)
+plot(density(df_all_months$prec))
 
-summary(df$prec)
-plot(density(df$prec))
+summary(df_all_months$ws) # WS exceed strongest wind ever recorded ~ 115m/s (no tornado)
+#df_all_months$ws[which(df_all_months$ws > 115)] <- NA
+#df_all_months <- df_all_months[!is.na(df_all_months$ws), ]
+plot(density(df_all_months$ws))
 
-summary(df$rh) # RH exceed 100%!
-plot(density(df$rh))
-df$rh[which(df$rh > 100.0001)] <- NA
-df <- df[!is.na(df$rh), ]
-plot(density(df$rh))
+summary(df_all_months$temp)
+# Check temperature does not exceed the highest value ever recorded!
+rows_to_fix <- which(df_all_months$temp > 56.7)
+# Remove oddly high values
+df_all_months <- df_all_months[df_all_months$temp <= 56.7, ]
 
-summary(df$ws) # WS exceed strongest wind ever recorded ~ 115m/s (no tornado)
-plot(density(df$ws))
-df$ws[which(df$ws > 115)] <- NA
-df <- df[!is.na(df$ws), ]
-plot(density(df$ws))
+summary(df_all_months$rh) # RH exceed 100%!
+# Check dew point temperature is NEVER GREATER than the air temperature.
+rows_to_fix <- which(df_all_months$dew > df_all_months$temp)
+# Set the relative humidity to be max 100%
+df_all_months$rh[rows_to_fix] <- 100
+df_all_months$fixed[rows_to_fix] <- TRUE
+plot(density(df_all_months$rh))
+
+apply(X = df_all_months, MARGIN = 2, FUN = function(x){any(is.na(x))})
 
 # Save all the stations as they are
-saveRDS(df, "data/df_all_stvl_python_clean.rds")
+saveRDS(df_all_months, "data/df_all_months_stvl_python_clean.rds")
 rm(list = ls())
 
 # PUT TOGETHER DATA FROM SYNOP STATIONS, ERAI, ERA5 AND GFWED ##################
 
+# GET FWI from reanalysis datasets
 erai <- raster::brick("data/fwi2017erai.nc")
 gfwed <- raster::brick("data/fwi2017gfwed_remapped.nc")
 era5 <- raster::brick("data/fwi2017era5.nc")
@@ -353,30 +333,20 @@ names(erai) <- names(era5) <- names(gfwed) <-
   seq.Date(from = as.Date("2017-01-01"), to = as.Date("2017-12-31"), by = "day")
 
 # Load unique stations and data
-df <- readRDS("data/df_all_stvl_python_clean.rds")
+df <- readRDS("data/df_all_months_stvl_python_clean.rds")
 ids <- unique(df$id)
 
-df_used <- data.frame(matrix(NA, nrow = 0, ncol = ncol(df) + 4))
-names(df_used) <- c(names(df), "OBS", "ERAI", "GFWED", "ERA5")
-
 for (i in seq_along(ids)){
-
-  print(i)
 
   # We filter over the station id
   dfx <- df %>% filter(id == ids[i]) %>% select(id, lat, long, tzid,
                                                 yr, mon, day,
-                                                temp, prec, rh, ws)
+                                                temp, prec, rh, ws, fixed)
 
-  # Discard stations with less than 30 days recording
-  if (dim(dfx)[1] >= 30){
+  # Discard stations with missing data
+  if (dim(dfx)[1] >= 350){
 
-    initial_condition <- data.frame(ffmc = 85, dmc = 6, dc = 15,
-                                    lat = dfx$lat[1])
-
-    dfx$OBS <- cffdrs::fwi(input = dfx,
-                           init = initial_condition,
-                           out = "fwi")$FWI
+    print(i)
 
     # Generate spatial points
     pt <- SpatialPoints(data.frame(long = dfx$long[1], lat = dfx$lat[1]))
@@ -396,36 +366,133 @@ for (i in seq_along(ids)){
     temp <- t(raster::extract(x = era5, y = pt))
     dfx$ERA5 <- temp[mytimestamps]
 
-    df_used <- dplyr::bind_rows(df_used, dfx)
-    rm(mytimestamps, temp, initial_condition, dfx)
-  }else{
-    print(paste("Station n.", i, "discarded because contains < 30 records"))
+    # Calculate observed FWI
+    initial_condition <- data.frame(ffmc = 85, dmc = 6, dc = 15,
+                                    lat = dfx$lat[1])
+    # duplicate dataset to allow for model spinup
+    idx <- rep(x = 1:dim(dfx)[1], times = 2)
+    dummy <- dfx[idx, ]
+    fwi <- cffdrs::fwi(input = dummy, init = initial_condition, out = "fwi")$FWI
+    dfx$OBS <- tail(fwi, n = dim(dfx)[1])
+
+    if (exists("df_fwi")){
+      df_fwi <- dplyr::bind_rows(df_fwi, dfx)
+    }else{
+      df_fwi <- dfx
+    }
+
   }
 
 }
 
-df_used$GFWED[df_used$GFWED == "NaN"] <- NA
+df_fwi$GFWED[df_fwi$GFWED == "NaN"] <- NA
 
-# Clean
-summary(df_used$OBS) # Obs FWI is not expected to exceed 200!
-summary(df_used$ERAI)
-summary(df_used$GFWED)
-summary(df_used$ERA5)
-
-plot(density(df_used$OBS))
-df_used$OBS[which(df_used$OBS > 200)] <- NA # Remove
-df_used <- df_used[!is.na(df_used$OBS), ]
-plot(density(df_used$OBS))
-
-plot(density(na.omit(df_used$ERAI)))
-plot(density(na.omit(df_used$GFWED)))
-plot(density(na.omit(df_used$ERA5)))
+# Clean, FWI is not expected to exceed 200!
+summary(df_fwi$OBS)
+summary(df_fwi$ERAI)
+summary(df_fwi$GFWED)
+summary(df_fwi$ERA5)
 
 # Save
-saveRDS(df_used, "data/df_geff_erai_gfwed_era5_stvl_python_clean.rds")
+saveRDS(df_fwi, "data/df_geff_erai_gfwed_era5_stvl_python.rds")
+
+# Check locations
+# library("rnaturalearth")
+# library("rnaturalearthdata")
+# world <- ne_countries(scale = "medium", returnclass = "sf")
+# plot(world[1], col = "lightgray", legend = FALSE, main = "")
+# x <- unique(df_fwi[, c("lat", "long")])
+# pt <- SpatialPoints(data.frame(long = x$long, lat = x$lat))
+# plot(pt, col = "red", add = TRUE)
+# Add GFED4 regions
+# BasisRegions <- readRDS("BasisRegions_simplified.rds")
+# fires <- spatialEco::point.in.poly(result, BasisRegions)
+
+# NEW VERUFUCATION, using all points in GFWED ##################################
+
+# Get GFED4 regions from caliver
+# gfed4_regions <- readRDS("/perm/mo/moc0/repos/caliver/inst/extdata/GFED4_BasisRegions.rds")
+
+# GET FWI from reanalysis datasets
+era5 <- raster::brick("data/fwi2017era5.nc")
+erai <- raster::brick("data/fwi2017erai.nc")
+erai_resampled <- raster::resample(x = erai, y = era5, method = "ngb",
+                                   progress = "text")
+rm(erai)
+gfwed <- raster::brick("data/fwi2017gfwed_remapped.nc")
+
+# If the layers have no dates, we add them
+dates <- seq.Date(from = as.Date("2017-01-01"),
+                  to = as.Date("2017-12-31"), by = "day")
+names(era5) <- names(erai_resampled) <- names(gfwed) <- dates
+
+bias_era5_minus_erai <- era5 - erai_resampled
+bias_era5_minus_gfwed <- era5 - gfwed
+
+r <- corLocal(r.stack[[1:12]], r.stack[[13:24]], test=TRUE )
+plot(r) # r and p-value map will be shown
+
+# only correlation cells where the p-value < 0.05 will be ommited
+
+r.mask <- mask(r[[1]], r[[2]] < 0.05, maskvalue=FALSE)
+
+plot(r.mask)
+
+############################# TABLE 1: summary table errors by region ##########
+
+df_fwi <- readRDS("data/df_geff_erai_gfwed_era5_stvl_python.rds")
+
+df_to_compare <- df_fwi %>%
+  # Split tzid into region and subregion
+  mutate(region = sapply(strsplit(tzid, "/"), `[`, 1),
+         subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
+  # filter(region != "Etc") %>% # remove undefined zones
+  filter(!is.na(OBS), !is.na(ERAI), !is.na(GFWED), !is.na(ERA5)) %>%
+  group_by(id) %>%
+  add_tally() %>% # add station count
+  filter(n >= 30) %>% # remove stations with less than 30 days in a year
+  summarise(lat = as.numeric(names(which.max(table(lat)))),
+            long = as.numeric(names(which.max(table(long)))),
+            region = names(which.max(table(region))),
+            obs = round(mean(OBS, na.rm = TRUE), 2),
+            erai = round(mean(ERAI, na.rm = TRUE), 2),
+            gfwed = round(mean(GFWED, na.rm = TRUE), 2),
+            era5 = round(mean(ERA5, na.rm = TRUE), 2),
+            # Bias and Anomaly correlation by time, id
+            bias_erai = round(mean(ERAI - OBS, na.rm = TRUE), 2),
+            bias_gfwed = round(mean(GFWED - OBS, na.rm = TRUE), 2),
+            bias_era5 = round(mean(ERA5 - OBS, na.rm = TRUE), 2),
+            ac_erai = round(cor(OBS - mean(OBS, na.rm = TRUE),
+                                ERAI - mean(ERAI, na.rm = TRUE)), 2),
+            ac_gfwed = round(cor(OBS - mean(OBS, na.rm = TRUE),
+                                 GFWED - mean(GFWED, na.rm = TRUE)), 2),
+            ac_era5 = round(cor(OBS - mean(OBS, na.rm = TRUE),
+                                ERA5 - mean(ERA5, na.rm = TRUE)), 2),
+            p_value_erai = cor.test(OBS - mean(OBS, na.rm = TRUE),
+                                    ERAI - mean(ERAI, na.rm = TRUE))$p.value < 0.05,
+            p_value_gfwed = cor.test(OBS - mean(OBS, na.rm = TRUE),
+                                     GFWED - mean(GFWED, na.rm = TRUE))$p.value < 0.05,
+            p_value_era5 = cor.test(OBS - mean(OBS, na.rm = TRUE),
+                                    ERA5 - mean(ERA5, na.rm = TRUE))$p.value < 0.05) %>%
+  filter(p_value_erai == TRUE, p_value_gfwed == TRUE, p_value_era5 == TRUE)
+
+# Summary table for large regions - copy-paste this into latex main.tex
+dfx_to_table <- df_to_compare %>%
+  group_by(region) %>%
+  summarise(n = n(), # Bias and Anomaly correlation by time, id and
+            bias_erai = round(mean(bias_erai), 2),
+            bias_gfwed = round(mean(bias_gfwed), 2),
+            bias_era5 = round(mean(bias_era5), 2),
+            ac_erai = round(mean(ac_erai), 2),
+            ac_gfwed = round(mean(ac_gfwed), 2),
+            ac_era5 = round(mean(ac_era5), 2))
+
+print(xtable::xtable(x = dfx_to_table, caption = "Validation"),
+      include.rownames = FALSE)
+
 rm(list = ls())
 
-############################# FIGURE 1 #########################################
+############################# FIGURE 1: CDS screenshot #########################
 
 # Screenshot of the CDS web interface
 
@@ -433,13 +500,12 @@ rm(list = ls())
 
 # Data validation: comparison with observed FWI, ERAI and GFWED
 
-df_used <- readRDS("data/df_geff_erai_gfwed_era5_stvl_python_clean.rds")
+df_fwi <- readRDS("data/df_geff_erai_gfwed_era5_stvl_python_clean.rds")
 
-minimum_size <- 1
-maximum_bias <- 200
+minimum_size <- 2
 scaling_function <- function(x) {sqrt(x)}
 
-df_to_map_era5 <- df_used %>%
+df_to_map_era5 <- df_fwi %>%
   # Split tzid into region and subregion
   mutate(region = sapply(strsplit(tzid, "/"), `[`, 1),
          subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
@@ -480,7 +546,6 @@ labels <- c("Unreliable observations",
 # Check locations on interactive map
 m <- leaflet(data = df_to_map_era5) %>%
   # Base groups
-  # addTiles(group = "OpenStreetMap") %>%
   addProviderTiles(providers$CartoDB.Positron, group = "CartoDB (default)") %>%
   addProviderTiles(providers$OpenTopoMap, group = "OpenTopoMap") %>%
   addCircleMarkers(~long, ~lat,
@@ -515,58 +580,7 @@ m <- leaflet(data = df_to_map_era5) %>%
 # PUBLISH ON RPUBS THE INTERACTIVE MAP, THEN TAKE A SCREENSHOT FOR THE PAPER
 saveWidget(m, file = "GEFF-ERA5_2017_diagnostic_map.html", selfcontained = TRUE)
 
-############################# TABLE 1 ##########################################
-
-df_to_compare <- df_used %>%
-  # Split tzid into region and subregion
-  mutate(region = sapply(strsplit(tzid, "/"), `[`, 1),
-         subregion = sapply(strsplit(tzid, "/"), `[`, 2)) %>%
-  filter(region != "Etc") %>% # remove undefined zones
-  filter(!is.na(OBS), !is.na(ERAI), !is.na(GFWED), !is.na(ERA5)) %>%
-  group_by(id) %>%
-  add_tally() %>% # add station count
-  filter(n >= 30) %>% # remove stations with less than 30 days in a year
-  summarise(lat = as.numeric(names(which.max(table(lat)))),
-            long = as.numeric(names(which.max(table(long)))),
-            region = names(which.max(table(region))),
-            obs = round(mean(OBS, na.rm = TRUE), 2),
-            erai = round(mean(ERAI, na.rm = TRUE), 2),
-            gfwed = round(mean(GFWED, na.rm = TRUE), 2),
-            era5 = round(mean(ERA5, na.rm = TRUE), 2),
-            # Bias and Anomaly correlation by time, id
-            bias_erai = round(mean(ERAI - OBS, na.rm = TRUE), 2),
-            bias_gfwed = round(mean(GFWED - OBS, na.rm = TRUE), 2),
-            bias_era5 = round(mean(ERA5 - OBS, na.rm = TRUE), 2),
-            ac_erai = round(cor(OBS - mean(OBS, na.rm = TRUE),
-                                ERAI - mean(ERAI, na.rm = TRUE)), 2),
-            ac_gfwed = round(cor(OBS - mean(OBS, na.rm = TRUE),
-                                 GFWED - mean(GFWED, na.rm = TRUE)), 2),
-            ac_era5 = round(cor(OBS - mean(OBS, na.rm = TRUE),
-                                ERA5 - mean(ERA5, na.rm = TRUE)), 2),
-            p_value_erai = cor.test(OBS - mean(OBS, na.rm = TRUE),
-                                    ERAI - mean(ERAI, na.rm = TRUE))$p.value < 0.05,
-            p_value_gfwed = cor.test(OBS - mean(OBS, na.rm = TRUE),
-                                     GFWED - mean(GFWED, na.rm = TRUE))$p.value < 0.05,
-            p_value_era5 = cor.test(OBS - mean(OBS, na.rm = TRUE),
-                                    ERA5 - mean(ERA5, na.rm = TRUE))$p.value < 0.05) %>%
-  filter(abs(bias_era5) < maximum_bias,
-         p_value_erai == TRUE, p_value_gfwed == TRUE, p_value_era5 == TRUE)
-
-# Summary table for large regions - copy-paste this into latex main.tex
-dfx_to_table <- df_to_compare %>%
-  group_by(region) %>%
-  summarise(n = n(), # Bias and Anomaly correlation by time, id and
-            bias_erai = round(mean(bias_erai), 2),
-            bias_gfwed = round(mean(bias_gfwed), 2),
-            bias_era5 = round(mean(bias_era5), 2),
-            ac_erai = round(mean(ac_erai), 2),
-            ac_gfwed = round(mean(ac_gfwed), 2),
-            ac_era5 = round(mean(ac_era5), 2))
-
-print(xtable::xtable(x = dfx_to_table, caption = "Validation"),
-      include.rownames = FALSE)
-
-############################# FIGURE 3 #########################################
+############################# FIGURE 3 boxplots of regional distributions ######
 
 # Explore global distributions
 x <- reshape2::melt(data = df_to_compare[, c("region", "obs",
@@ -603,7 +617,7 @@ x %>% filter(region == "Atlantic") %>%
 
 rm(list = ls())
 
-############################# FIGURE 4 #########################################
+############################# FIGURE 4: ecdf ENS ###############################
 
 df_ens <- data.frame(matrix(NA, nrow = 0, ncol = 16))
 dates_2017 <- seq.Date(from = as.Date("2017-01-01"),
@@ -640,8 +654,6 @@ for (i in seq_along(dates_2017)){
 
 }
 
-saveRDS(df_ens, "data/df_ens.rds")
-
 df_melt <- df_ens %>%
   reshape2::melt(id.vars = c("region", "lat", "long", "date", "OBS", "ERA5"))
 
@@ -658,7 +670,7 @@ ggplot(df_melt) +
   xlab("") + ylab("") + xlim(0, 100) + ylim(0.5, 1) +
   scale_colour_discrete(name = "ENS Reanalysis", h = c(0, 360), c = 80, l = 60)
 
-# Comparison with ENSO #########################################################
+############################# FIGURE 5: comparison with ENSO (boxplot) #########
 
 # Crop reanalysis over SE Asia
 system("cdo sellonlatbox,90,132,-14,21 /scratch/rd/nen/perClaudia/era5/fwi_1980_2019.nc /perm/mo/moc0/repos/GEFF-ERA5/data/fwi_era5_seasia.nc")
@@ -698,8 +710,6 @@ df_ens <- na.omit(setNames(as.data.frame(days_above_98), 1980:2018)) %>%
                                        2000, 2007, 2008, 2010, 2011, 2015),
                        0.5, 0.1))
 
-############################# FIGURE 5 #########################################
-
 ggplot(df_ens, aes(x = variable, y = value, fill = col)) +
   geom_boxplot(outlier.alpha = 0) +
   theme(text = element_text(size = 20),
@@ -710,7 +720,7 @@ ggplot(df_ens, aes(x = variable, y = value, fill = col)) +
                     breaks = c("blue", "gray", "red"),
                     values = c("blue", "gray", "red"))
 
-############################# FIGURE 6 #########################################
+############################# FIGURE 6: comparison with ENSO (maps) ############
 
 # Map of days above threshold
 myMap <- get_stamenmap(bbox = c(left = bbox(days_above_98)[[1]],

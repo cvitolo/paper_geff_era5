@@ -37,3 +37,7 @@ vignettes/*.pdf
 rsconnect/
 .Rproj.user
 old/*
+
+data/fwi*.nc
+data/clima*.nc
+images/*
