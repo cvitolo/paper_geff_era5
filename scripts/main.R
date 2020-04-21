@@ -30,13 +30,13 @@ writeRaster(erai, filename = "data/fwi2017erai.nc", format = "CDF",
 system("cdo remapnn,data/fwi2017era5.nc data/fwi2017erai.nc data/fwi2017erai_remapped.nc")
 
 # FWI based on GFWED
-myDates <- seq.Date(from = as.Date("2017-01-01"),
-                    to = as.Date("2017-12-31"),
-                    by = "day")
+dates_2017 <- seq.Date(from = as.Date("2017-01-01"),
+                       to = as.Date("2017-12-31"),
+                       by = "day")
 
-for (myday in seq_along(myDates)){
+for (myday in seq_along(dates_2017)){
   print(myday)
-  reformatted_date <- gsub(pattern = "-", replacement = "", myDates[myday])
+  reformatted_date <- gsub(pattern = "-", replacement = "", dates_2017[myday])
   tmpfilename <- paste0("FWI.GEOS-5.Daily.Default.", reformatted_date, ".nc")
   download.file(url = paste0("https://portal.nccs.nasa.gov/datashare/",
                              "GlobalFWI/v2.0/fwiCalcs.GEOS-5/Default/",
@@ -48,11 +48,9 @@ for (myday in seq_along(myDates)){
 system("cdo select,name=GEOS-5_FWI /hugetmp/reanalysis/GFWED/all/* data/fwi2017gfwed.nc")
 system("cdo remapnn,data/fwi2017era5.nc data/fwi2017gfwed.nc data/fwi2017gfwed_remapped.nc")
 
-rm(list = ls())
-
 # TECHNICAL VALIDATION #########################################################
 
-# GET FWI from reanalysis datasets
+# GET FWI from reanalysis hres datasets
 era5 <- raster::brick("data/fwi2017era5.nc")
 erai <- raster::brick("data/fwi2017erai_remapped.nc")
 gfwed <- raster::brick("data/fwi2017gfwed_remapped.nc")
@@ -86,47 +84,132 @@ ac_era5_gfwed_masked <- mask(x = ac_era5_gfwed[[1]],
                              mask = ac_era5_gfwed[[2]] > 0.05,
                              maskvalue = TRUE)
 
-# Calculate biases
+# Calculate biases (masked as the AC plots, for visual consistency)
 bias_era5_erai <- era5_masked - erai_masked
 bias_era5_gfwed <- era5_masked - gfwed
 mean_bias_era5_erai <- calc(x = bias_era5_erai, fun = mean, na.rm = TRUE)
 mean_bias_era5_gfwed <- calc(x = bias_era5_gfwed, fun = mean, na.rm = TRUE)
 mean_bias_era5_erai_masked <- mask(x = mean_bias_era5_erai,
-                                    mask = ac_era5_erai[[2]] > 0.05,
-                                    maskvalue = TRUE)
+                                   mask = ac_era5_erai[[2]] > 0.05,
+                                   maskvalue = TRUE)
 mean_bias_era5_gfwed_masked <- mask(x = mean_bias_era5_gfwed,
                                     mask = ac_era5_gfwed[[2]] > 0.05,
                                     maskvalue = TRUE)
 
-writeRaster(mean_bias_era5_erai_masked,
-            filename = "data/mean_bias_era5_erai.nc",
-            format = "CDF", overwrite = TRUE)
-writeRaster(mean_bias_era5_gfwed_masked,
-            filename = "data/mean_bias_era5_gfwed.nc",
-            format = "CDF", overwrite = TRUE)
-writeRaster(ac_era5_erai_masked,
-            filename = "data/ac_era5_erai_masked.nc",
-            format = "CDF", overwrite = TRUE)
-writeRaster(ac_era5_gfwed_masked,
-            filename = "data/ac_era5_gfwed_masked.nc",
+errors <- stack(mean_bias_era5_gfwed_masked, mean_bias_era5_erai_masked,
+                ac_era5_gfwed_masked, ac_era5_erai_masked)
+names(errors) <- c("bias_gfwed", "bias_erai", "ac_gfwed", "ac_erai")
+
+writeRaster(errors, filename = "data/errors.nc",
             format = "CDF", overwrite = TRUE)
 
-############################# FIGURE 1: CDS screenshot #########################
+# Assess ensemble
+era5_ens_mean_stack <- era5_ens_sd_stack <- stack()
+for (i in seq_along(dates_2017)){
+
+  one_date <- dates_2017[i]
+  print(one_date)
+
+  era5_hr <- raster::raster(file.path("/hugetmp/reanalysis/GEFF-ERA5/hres/fwi/",
+                                      paste0("ECMWF_FWI_",
+                                             gsub("-", "", one_date),
+                                             "_1200_hr_fwi.nc")))
+
+  # Get ERA5 ENS
+  era5_ens <- raster::stack()
+  for (ens_member in 0:9){
+    era5_ens <- raster::stack(era5_ens,
+                              file.path("/hugetmp/reanalysis/GEFF-ERA5/ens",
+                                        paste0("ECMWF_FWI_",
+                                               gsub("-", "", one_date),
+                                               "_1200_0", ens_member, "_fwi.nc")))
+  }
+  # Mean
+  era5_ens_mean <- calc(era5_ens, mean)
+  era5_ens_mean_stack <- stack(era5_ens_mean_stack, era5_ens_mean)
+  # Spread
+  era5_ens_sd <- calc(era5_ens, sd)
+  era5_ens_sd_stack <- stack(era5_ens_sd_stack, era5_ens_sd)
+
+}
+era5_ens_mean_stack_mean <- rotate(calc(era5_ens_mean_stack, mean))
+era5_ens_sd_stack_mean <- rotate(calc(era5_ens_sd_stack, mean))
+
+writeRaster(era5_ens_mean_stack_mean,
+            filename = "data/era5_ens_mean_stack_mean.nc",
+            format = "CDF", overwrite = TRUE)
+writeRaster(era5_ens_sd_stack_mean, filename = "data/era5_ens_sd_stack_mean.nc",
+            format = "CDF", overwrite = TRUE)
+
+rm(list = ls())
+
+# FIGURE 1: CDS screenshot #####################################################
 
 # Screenshot of the CDS web interface
 
-############################# FIGURE 2 #########################################
+# FIGURE 2: HRES MEAN ##########################################################
 
-bias_gfwed <- raster("data/mean_bias_era5_gfwed.nc")
-bias_erai <- raster("data/mean_bias_era5_erai.nc")
-ac_gfwed <- raster("data/ac_era5_gfwed_masked.nc")
-ac_erai <- raster("data/ac_era5_erai_masked.nc")
+era5_hres <- raster::brick("data/fwi2017era5.nc")
+era5_hres_mean <- raster::calc(era5_hres, mean)
 
-errors <- stack(bias_gfwed, bias_erai, ac_gfwed, ac_erai)
-names(errors) <- c("bias_gfwed", "bias_erai", "ac_gfwed", "ac_erai")
+# Define size of static maps
+ratioWH <- 1.77
+W <- 10
+H <- W/ratioWH
 
+# Set up breaks
+breaks_fwi <- c(0, 10, 20, 30, 40, 50, 60, 70, 80, 90, +Inf)
+
+# Set up palettes
+pal_fwi <- rev(colorspace::sequential_hcl(length(breaks_fwi) - 1,
+                                          palette = "Red-Yellow"))
+
+cairo_ps("images/hres_mean.eps", width = W, height = H)
+plot(era5_hres_mean, breaks = breaks_fwi, main = "",
+     col = pal_fwi, legend = FALSE)
+plot(coastline110, add = TRUE)
+legend("bottomleft", horiz = FALSE, inset = 0.01, title = "Mean of FWI HRES",
+       fill = pal_fwi, border = "gray", box.col = NA,
+       legend = c("[0, 10[", "[10, 20[", "[20, 30[", "[30, 40[", "[40, 50[",
+                  "[50, 60[", "[60, 70[", "[70, 80[", "[80, 90[", "[90, 100+["))
+dev.off()
+
+# FIGURE 3: ENS MEAN AND SPREAD ################################################
+era5_ens_mean <- raster::raster("data/era5_ens_mean_stack_mean.nc")
+era5_ens_sd <- raster::raster("data/era5_ens_sd_stack_mean.nc")
+
+cairo_ps("images/ens_mean.eps", width = W, height = H)
+plot(era5_ens_mean, breaks = breaks_fwi, main = "",
+     col = pal_fwi, legend = FALSE)
+plot(coastline110, add = TRUE)
+legend("bottomleft", horiz = FALSE, inset = 0.01,
+       title = "Mean of FWI\n ENS mean",
+       fill = pal_fwi, border = "gray", box.col = NA,
+       legend = c("[0, 10[", "[10, 20[", "[20, 30[", "[30, 40[", "[40, 50[",
+                  "[50, 60[", "[60, 70[", "[70, 80[", "[80, 90[", "[90, 100+["))
+dev.off()
+
+breaks_sd <- c(0, 1, 2, 3, 4, 5, 6, 7, 8)
+pal_sd <- colorspace::sequential_hcl(length(breaks_sd) - 1, palette = "Oslo")
+
+cairo_ps("images/ens_spread.eps", width = W, height = H)
+plot(era5_ens_sd, breaks = breaks_sd, main = "",
+     col = pal_sd, legend = FALSE)
+plot(coastline110, add = TRUE)
+legend("bottomleft", horiz = FALSE, inset = 0.01,
+       title = "Mean of FWI\n ENS spread",
+       fill = pal_sd, border = "gray", box.col = NA,
+       legend = c("[0, 1[", "[1, 2[", "[2, 3[", "[3, 4[", "[4, 5[", "[5, 6[",
+                  "[6, 7[", "[7, 8]"))
+dev.off()
+
+# FIGURES 3&4: BIAS and AC #####################################################
+
+errors <- raster::brick("data/errors.nc")
 gfed <- readRDS("data/GFED4_BasisRegions.rds")
+
 df <- data.frame(zonal(x = errors, z = rasterize(x = gfed, y = errors[[1]])))
+
 df$Region <- c("Boreal North America",
                "Temperate North America",
                "Central America",
@@ -149,20 +232,15 @@ print(xtable::xtable(x = df[, c(6, 2:5)], caption = "Validation"),
 breaks_bias <- c(-60, -30, -15, -10, -5, 5, 10, 15, 30, 60)
 breaks_ac <- c(-1, -0.6, -0.2, 0, 0.2, 0.6, 1)
 # Set up palettes
-pal_bias <- rev(colorspace::diverge_hcl(length(breaks_bias) - 1, palette = "Blue-Red"))
-pal_ac <- colorspace::sequential_hcl(length(breaks_ac) - 1, palette = "Inferno")
-
-# STATIC FIGURES
-ratioWH <- 1.77
-W <- 10
-H <- W/ratioWH
+pal_bias <- rev(colorspace::diverge_hcl(length(breaks_bias) - 1,
+                                        palette = "Blue-Red"))
+pal_ac <- colorspace::sequential_hcl(length(breaks_ac) - 1,
+                                     palette = "Inferno")
 
 cairo_ps("images/bias_erai.eps", width = W, height = H)
 plot(bias_erai, breaks = breaks_bias, main = "(a) ERA5 vs ERAI",
      col = pal_bias, legend = FALSE)
 plot(coastline110, add = TRUE)
-#plot(gfed, add = TRUE, lwd = 0.5)
-#rgeos::polygonsLabel(gfed, gfed@data$Region, method = "buffer", cex = 0.8)
 legend("bottomleft", horiz = FALSE, inset = 0.01, title = "Mean bias",
        fill = pal_bias, border = "gray", box.col = NA,
        legend = c("[-60, -30[", "[-30, -15[", "[-15, -10[", "[-10, -5[",
@@ -205,96 +283,6 @@ legend("bottomleft", horiz = FALSE, inset = 0.01, title = "Anomaly correlation",
                   "[-0.2, 0[", "[0, +0.2[",
                   "[+0.2, +0.6[", "[+0.6, +1.0]"))
 dev.off()
-
-############################# FIGURE 3 boxplots of regional distributions ######
-
-# Explore global distributions
-x <- reshape2::melt(data = df_to_compare[, c("region", "obs",
-                                             "erai", "gfwed", "era5")],
-                    id.vars = "region")
-
-means <- aggregate(value ~  variable + region, x, mean)
-
-p <- ggplot(x, aes(x = variable, y = value)) +
-  geom_boxplot(outlier.shape = NA, width = 0.8) +
-  geom_point(data = means, aes(x = variable, y = value),
-             shape = 21, colour = "black", fill = "white") + #col = "red"
-  facet_wrap(~region, scales = "free_y") +
-  xlab("") + ylab("FWI") + theme_bw() +
-  scale_x_discrete(labels = c("OBS", "ERAI", "GFWED", "ERA5")) +
-  theme(text = element_text(size = 20), legend.position = "none")
-ggsave(filename = "images/boxplots.eps",
-       plot = p,
-       device = "eps",
-       width = 300,
-       height = 250,
-       units = "mm",
-       dpi = 300)
-
-# Calculate median for Atlantic
-x %>% filter(region == "Atlantic") %>%
-  group_by(variable) %>%
-  summarise(meanFWI = median(value))
-
-# Calculate mean for Atlantic
-x %>% filter(region == "Atlantic") %>%
-  group_by(variable) %>%
-  summarise(meanFWI = mean(value))
-
-rm(list = ls())
-
-############################# FIGURE 4: ecdf ENS ###############################
-
-df_ens <- data.frame(matrix(NA, nrow = 0, ncol = 16))
-dates_2017 <- seq.Date(from = as.Date("2017-01-01"),
-                       to = as.Date("2017-12-31"),
-                       by = "day")
-for (i in seq_along(dates_2017)){
-
-  one_date <- dates_2017[i]
-  print(one_date)
-
-  # Get ERA5 ENS
-  era5 <- raster::stack()
-  for (ens_member in 0:9){
-    era5 <- raster::stack(era5,
-                          file.path("/hugetmp/reanalysis/GEFF-ERA5/ens",
-                                    paste0("ECMWF_FWI_",
-                                           gsub("-", "", one_date),
-                                           "_1200_0", ens_member, "_fwi.nc")))
-  }
-  era5 <- raster::rotate(era5)
-
-  # Filter points with OBS on a given date
-  dfx_date <- dfx_points[dfx_points$date == one_date, ]
-  # Add placeholders columns
-  dfx_date[, 7:16] <- NA
-  # Convert to sp objects
-  sp::coordinates(dfx_date) <- ~long+lat
-  # Point inspection
-  dfx_date@data[, 5:14] <- raster::extract(x = era5, y = dfx_date)
-
-  x <- as.data.frame(dfx_date)
-  x <- x[complete.cases(x),]
-  df_ens <- rbind(df_ens, x)
-
-}
-
-df_melt <- df_ens %>%
-  reshape2::melt(id.vars = c("region", "lat", "long", "date", "OBS", "ERA5"))
-
-ggplot(df_melt) +
-  facet_wrap(~region, ncol = 4, scale = "free") +
-  # OBS
-  stat_ecdf(aes(x = OBS, linetype = "Observations"), lwd = 0.5) +
-  # ERA5
-  stat_ecdf(aes(x = ERA5, linetype = "HRES Reanalysis"), lwd = 0.5) +
-  # ENS
-  stat_ecdf(aes(x = value, colour = region, group = variable)) +
-  scale_linetype_discrete(name = "") +
-  theme(text = element_text(size=20)) +
-  xlab("") + ylab("") + xlim(0, 100) + ylim(0.5, 1) +
-  scale_colour_discrete(name = "ENS Reanalysis", h = c(0, 360), c = 80, l = 60)
 
 ############################# FIGURE 5: comparison with ENSO (boxplot) #########
 
