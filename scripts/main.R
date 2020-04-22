@@ -203,9 +203,11 @@ legend("bottomleft", horiz = FALSE, inset = 0.01,
                   "[6, 7[", "[7, 8]"))
 dev.off()
 
-# FIGURES 3&4: BIAS and AC #####################################################
+# FIGURES 4&5: BIAS and AC #####################################################
 
 errors <- raster::brick("data/errors.nc")
+names(errors) <- c("bias_gfwed", "bias_erai", "ac_gfwed", "ac_erai")
+
 gfed <- readRDS("data/GFED4_BasisRegions.rds")
 
 df <- data.frame(zonal(x = errors, z = rasterize(x = gfed, y = errors[[1]])))
@@ -284,7 +286,7 @@ legend("bottomleft", horiz = FALSE, inset = 0.01, title = "Anomaly correlation",
                   "[+0.2, +0.6[", "[+0.6, +1.0]"))
 dev.off()
 
-############################# FIGURE 5: comparison with ENSO (boxplot) #########
+# FIGURE 6: comparison with ENSO (boxplot) #####################################
 
 # Crop reanalysis over SE Asia
 system("cdo sellonlatbox,90,132,-14,21 /scratch/rd/nen/perClaudia/era5/fwi_1980_2019.nc /perm/mo/moc0/repos/GEFF-ERA5/data/fwi_seasia.nc")
@@ -334,7 +336,7 @@ ggplot(df_ens, aes(x = variable, y = value, fill = col)) +
                     breaks = c("blue", "gray", "red"),
                     values = c("blue", "gray", "red"))
 
-############################# FIGURE 6: comparison with ENSO (maps) ############
+# FIGURE 7: comparison with ENSO (maps) ########################################
 
 # Map of days above threshold
 myMap <- get_stamenmap(bbox = c(left = bbox(days_above_98)[[1]],
