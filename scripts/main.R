@@ -3,6 +3,9 @@
 library("raster")
 library("rnaturalearthdata")
 library("colorspace")
+library("dplyr")
+library("ggplot2")
+library("ggmap")
 
 # Get data from GFWED, ERAI AND ERA5 for year 2017 #############################
 
@@ -311,6 +314,7 @@ for (myyear in 1980:2018){
 }
 writeRaster(days_above_98, filename = "data/days_above_98_seasia.nc",
             format = "CDF", overwrite = TRUE)
+# days_above_98 <- raster::brick("data/days_above_98_seasia.nc")
 
 # https://ggweather.com/enso/oni.htm
 df_ens <- na.omit(setNames(as.data.frame(days_above_98), 1980:2018)) %>%
@@ -326,9 +330,9 @@ df_ens <- na.omit(setNames(as.data.frame(days_above_98), 1980:2018)) %>%
                                        2000, 2007, 2008, 2010, 2011, 2015),
                        0.5, 0.1))
 
-ggplot(df_ens, aes(x = variable, y = value, fill = col)) +
+df_ens_plot <- ggplot(df_ens, aes(x = variable, y = value, fill = col)) +
   geom_boxplot(outlier.alpha = 0) +
-  theme(text = element_text(size = 20),
+  theme(text = element_text(size = 16),
         axis.text.x = element_text(angle = 90, vjust = 0.5)) +
   xlab("") + ylab("Number of days above 98th percentile") + ylim(0, 60) +
   scale_fill_manual(name = "",
@@ -336,14 +340,18 @@ ggplot(df_ens, aes(x = variable, y = value, fill = col)) +
                     breaks = c("blue", "gray", "red"),
                     values = c("blue", "gray", "red"))
 
+ggsave(filename = "images/enso_timeseries_sea.eps", plot = df_ens_plot,
+       device = "eps", width = W, height = H, units = "in")
+
 # FIGURE 7: comparison with ENSO (maps) ########################################
 
 # Map of days above threshold
-myMap <- get_stamenmap(bbox = c(left = bbox(days_above_98)[[1]],
-                                bottom = bbox(days_above_98)[[2]],
-                                right = bbox(days_above_98)[[3]],
-                                top = bbox(days_above_98)[[4]]),
-                       maptype="toner-lite", color="bw", zoom=5, crop = T)
+myMap <- ggmap::get_stamenmap(bbox = c(left = bbox(days_above_98)[[1]],
+                                       bottom = bbox(days_above_98)[[2]],
+                                       right = bbox(days_above_98)[[3]],
+                                       top = bbox(days_above_98)[[4]]),
+                              maptype = "toner-lite",
+                              color = "bw", zoom = 5, crop = T)
 
 myplot <- ggmap(myMap) + xlab("Longitude") + ylab("Latitude") +
   theme(plot.title = element_text(hjust = 0.5))
@@ -364,7 +372,7 @@ rtp_2010$layer <- cut(rtp_2010$layer, seq(0, common_max, 10),
 common_palette <- colorspace::sequential_hcl(12, palette = "RedYellow",
                                              rev = TRUE)
 
-myplot + ggtitle("1997") +
+myplot + ggtitle("(a) Very strong positive ENSO in 1997") +
   geom_polygon(data = rtp_1997,
                aes(x = long, y = lat, group = group,
                    fill = rep(rtp_1997$layer, each = 5)),
@@ -372,9 +380,12 @@ myplot + ggtitle("1997") +
   scale_fill_manual(name = "Number of days\nabove 98th\npercentile",
                     values = common_palette,
                     drop = FALSE) +
-  theme(text = element_text(size=20))
+  theme(text = element_text(size = 12))
 
-myplot + ggtitle("2010") +
+ggsave(filename = "images/Y1997.pdf", plot = last_plot(),
+       device = "pdf", width = W, height = H, units = "in")
+
+myplot + ggtitle("(b) Very strong negative ENSO in 2010") +
   geom_polygon(data = rtp_2010,
                aes(x = long, y = lat, group = group,
                    fill = rep(rtp_2010$layer, each = 5)),
@@ -382,4 +393,7 @@ myplot + ggtitle("2010") +
   scale_fill_manual(name = "Number of days\nabove 98th\npercentile",
                     values = common_palette,
                     drop = FALSE) +
-  theme(text = element_text(size=20))
+  theme(text = element_text(size = 12))
+
+ggsave(filename = "images/Y2010.pdf", plot = last_plot(),
+       device = "pdf", width = W, height = H, units = "in")
