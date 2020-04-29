@@ -289,7 +289,103 @@ legend("bottomleft", horiz = FALSE, inset = 0.01, title = "Anomaly correlation",
                   "[+0.2, +0.6[", "[+0.6, +1.0]"))
 dev.off()
 
-# FIGURE 6: comparison with ENSO (boxplot) #####################################
+# FIGURE 6: ENS use case #######################################################
+
+# Pedrogao Grande
+spoint <- sf::st_as_sf(data.frame(long = -8.23, lat = 39.95),
+                       coords = c("long", "lat"), crs = 4326)
+plot(coastline110); plot(spoint, add = TRUE, col = "red")
+
+for (i in seq_along(dates_2017)){
+  
+  one_date <- dates_2017[i]
+  print(one_date)
+  
+  era5_hr <- raster::raster(file.path("/hugetmp/reanalysis/GEFF-ERA5/hres/fwi/",
+                                      paste0("ECMWF_FWI_",
+                                             gsub("-", "", one_date),
+                                             "_1200_hr_fwi.nc")))
+  era5_hr <- raster::rotate(era5_hr)
+  era5_hr <- raster::extract(era5_hr, spoint)
+  
+  # Get ERA5 ENS
+  era5_ens <- raster::stack()
+  for (ens_member in 0:9){
+    era5_ens <- raster::stack(era5_ens,
+                              file.path("/hugetmp/reanalysis/GEFF-ERA5/ens",
+                                        paste0("ECMWF_FWI_",
+                                               gsub("-", "", one_date),
+                                               "_1200_0", ens_member, "_fwi.nc")))
+  }
+  
+  # Get data at point
+  era5_ens <- as.numeric(raster::extract(rotate(era5_ens), spoint))
+  x <- data.frame(hr = era5_hr,
+                  ens_00 = era5_ens[1], ens_01 = era5_ens[2],
+                  ens_02 = era5_ens[3], ens_03 = era5_ens[4],
+                  ens_04 = era5_ens[5], ens_05 = era5_ens[6],
+                  ens_06 = era5_ens[7], ens_07 = era5_ens[8],
+                  ens_08 = era5_ens[9], ens_09 = era5_ens[10])
+  
+  if (exists("dfx")){
+    dfx <- rbind(dfx, x)
+  }else{
+    dfx <- x
+  }
+  
+}
+
+dfx$date <- dates_2017
+dfx$ens_min <- apply(dfx[, 2:11], 1, min)
+dfx$ens_max <- apply(dfx[, 2:11], 1, max)
+dfx$ens_mean <- apply(dfx[, 2:11], 1, mean)
+
+saveRDS(dfx, "data/dfx_ens.rds")
+
+ggplot(dfx, aes(date)) +
+  geom_ribbon(aes(ymin = ens_min, ymax = ens_max), fill = "grey80") +
+  geom_line(aes(y = ens_mean, color = "ENS mean"), size = 0.5) +
+  # geom_line(aes(y = hr, color = "HRES"), size = 0.5) +
+  lims(x = c(as.Date("2017-06-01"), as.Date("2017-06-30")), y = c(0, 45)) +
+  geom_vline(xintercept = as.Date("2017-06-17"),
+             linetype = "dashed", color = "red", size = 1) +
+  annotate(geom = "text", x = as.Date("2017-06-21"),
+           y = 5, label = "Event in Pedrógão Grande", color = "red") +
+  scale_color_discrete(name = "") + xlab("") + ylab("FWI") + theme_bw()
+
+ggsave(filename = "images/PG_ens_2017.eps", plot = last_plot(),
+       device = "eps", width = W, height = H, units = "in")
+
+# Full time series and trends at Pedrogao Grande
+
+library(dplyr)
+library(dygraphs)
+
+dates <- seq.Date(from = as.Date("1980-01-01"),
+                  to = as.Date("2019-12-31"),
+                  by = "day")
+
+ncfname <- "data/cds_fwi_ens_PG.nc"
+x <- raster::raster(ncfname)
+df <- as.data.frame(x, xy = TRUE) %>%
+  tidyr::pivot_wider(names_from = "x", values_from = "Index") %>%
+  dplyr::arrange(y)  %>%
+  mutate(dates = dates)
+df$mean <- apply(df[, 2:11], 1, mean)
+df <- xts::xts(x = df[, c(2:11, 13)], order.by = df$dates)
+names(df)[1:10] <- paste0("em", 0:9)
+
+dygraph(df, main = "Daily FWI from GEFF-ERA5 ENS at Pedrógão Grande") %>%
+  dyGroup(paste0("em", 0:9), color = rep("gray", 10)) %>%
+  dySeries("mean", color = "red")
+
+df_mon <- xts::apply.monthly(df, FUN = mean)
+
+dygraph(df_mon, main = "Monthly FWI from GEFF-ERA5 ENS at Pedrógão Grande") %>%
+  dyGroup(paste0("em", 0:9), color = rep("gray", 10)) %>%
+  dySeries("mean", color = "red")
+
+# FIGURE 7: comparison with ENSO (boxplot) #####################################
 
 # Crop reanalysis over SE Asia
 system("cdo sellonlatbox,90,132,-14,21 /scratch/rd/nen/perClaudia/era5/fwi_1980_2019.nc /perm/mo/moc0/repos/GEFF-ERA5/data/fwi_seasia.nc")
@@ -343,7 +439,7 @@ df_ens_plot <- ggplot(df_ens, aes(x = variable, y = value, fill = col)) +
 ggsave(filename = "images/enso_timeseries_sea.eps", plot = df_ens_plot,
        device = "eps", width = W, height = H, units = "in")
 
-# FIGURE 7: comparison with ENSO (maps) ########################################
+# FIGURE 8: comparison with ENSO (maps) ########################################
 
 # Map of days above threshold
 myMap <- ggmap::get_stamenmap(bbox = c(left = bbox(days_above_98)[[1]],
@@ -397,71 +493,3 @@ myplot + ggtitle("(b) Very strong negative ENSO in 2010") +
 
 ggsave(filename = "images/Y2010.pdf", plot = last_plot(),
        device = "pdf", width = W, height = H, units = "in")
-
-# FIGURE 8: ENS use case #######################################################
-
-# Pedrogao Grande
-spoint <- sf::st_as_sf(data.frame(long = -8.23, lat = 39.95),
-                       coords = c("long", "lat"), crs = 4326)
-plot(coastline110); plot(spoint, add = TRUE, col = "red")
-
-for (i in seq_along(dates_2017)){
-
-  one_date <- dates_2017[i]
-  print(one_date)
-
-  era5_hr <- raster::raster(file.path("/hugetmp/reanalysis/GEFF-ERA5/hres/fwi/",
-                                      paste0("ECMWF_FWI_",
-                                             gsub("-", "", one_date),
-                                             "_1200_hr_fwi.nc")))
-  era5_hr <- raster::rotate(era5_hr)
-  era5_hr <- raster::extract(era5_hr, spoint)
-
-  # Get ERA5 ENS
-  era5_ens <- raster::stack()
-  for (ens_member in 0:9){
-    era5_ens <- raster::stack(era5_ens,
-                              file.path("/hugetmp/reanalysis/GEFF-ERA5/ens",
-                                        paste0("ECMWF_FWI_",
-                                               gsub("-", "", one_date),
-                                               "_1200_0", ens_member, "_fwi.nc")))
-  }
-
-  # Get data at point
-  era5_ens <- as.numeric(raster::extract(rotate(era5_ens), spoint))
-  x <- data.frame(hr = era5_hr,
-                  ens_00 = era5_ens[1], ens_01 = era5_ens[2],
-                  ens_02 = era5_ens[3], ens_03 = era5_ens[4],
-                  ens_04 = era5_ens[5], ens_05 = era5_ens[6],
-                  ens_06 = era5_ens[7], ens_07 = era5_ens[8],
-                  ens_08 = era5_ens[9], ens_09 = era5_ens[10])
-
-  if (exists("dfx")){
-    dfx <- rbind(dfx, x)
-  }else{
-    dfx <- x
-  }
-
-}
-
-dfx$date <- dates_2017
-dfx$ens_min <- apply(dfx[, 2:11], 1, min)
-dfx$ens_max <- apply(dfx[, 2:11], 1, max)
-dfx$ens_mean <- apply(dfx[, 2:11], 1, mean)
-
-saveRDS(dfx, "data/dfx_ens.rds")
-
-ggplot(dfx, aes(date)) +
-  geom_ribbon(aes(ymin = ens_min, ymax = ens_max), fill = "grey80") +
-  geom_line(aes(y = ens_mean, color = "ENS mean"), size = 0.5) +
-  # geom_line(aes(y = hr, color = "HRES"), size = 0.5) +
-  lims(x = c(as.Date("2017-06-01"), as.Date("2017-06-30")), y = c(0, 45)) +
-  geom_vline(xintercept = as.Date("2017-06-17"),
-             linetype = "dashed", color = "red", size = 1) +
-  annotate(geom = "text", x = as.Date("2017-06-21"),
-           y = 5, label = "Event in Pedrógão Grande", color = "red") +
-  scale_color_discrete(name = "") + xlab("") + ylab("FWI") + theme_bw()
-
-ggsave(filename = "images/PG_ens_2017.eps", plot = last_plot(),
-       device = "eps", width = W, height = H, units = "in")
-
