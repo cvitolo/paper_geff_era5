@@ -6,6 +6,7 @@ library("colorspace")
 library("dplyr")
 library("ggplot2")
 library("ggmap")
+library("dygraphs")
 
 # Get data from GFWED, ERAI AND ERA5 for year 2017 #############################
 
@@ -297,17 +298,17 @@ spoint <- sf::st_as_sf(data.frame(long = -8.23, lat = 39.95),
 plot(coastline110); plot(spoint, add = TRUE, col = "red")
 
 for (i in seq_along(dates_2017)){
-  
+
   one_date <- dates_2017[i]
   print(one_date)
-  
+
   era5_hr <- raster::raster(file.path("/hugetmp/reanalysis/GEFF-ERA5/hres/fwi/",
                                       paste0("ECMWF_FWI_",
                                              gsub("-", "", one_date),
                                              "_1200_hr_fwi.nc")))
   era5_hr <- raster::rotate(era5_hr)
   era5_hr <- raster::extract(era5_hr, spoint)
-  
+
   # Get ERA5 ENS
   era5_ens <- raster::stack()
   for (ens_member in 0:9){
@@ -317,7 +318,7 @@ for (i in seq_along(dates_2017)){
                                                gsub("-", "", one_date),
                                                "_1200_0", ens_member, "_fwi.nc")))
   }
-  
+
   # Get data at point
   era5_ens <- as.numeric(raster::extract(rotate(era5_ens), spoint))
   x <- data.frame(hr = era5_hr,
@@ -326,13 +327,13 @@ for (i in seq_along(dates_2017)){
                   ens_04 = era5_ens[5], ens_05 = era5_ens[6],
                   ens_06 = era5_ens[7], ens_07 = era5_ens[8],
                   ens_08 = era5_ens[9], ens_09 = era5_ens[10])
-  
+
   if (exists("dfx")){
     dfx <- rbind(dfx, x)
   }else{
     dfx <- x
   }
-  
+
 }
 
 dfx$date <- dates_2017
@@ -340,7 +341,8 @@ dfx$ens_min <- apply(dfx[, 2:11], 1, min)
 dfx$ens_max <- apply(dfx[, 2:11], 1, max)
 dfx$ens_mean <- apply(dfx[, 2:11], 1, mean)
 
-saveRDS(dfx, "data/dfx_ens.rds")
+# saveRDS(dfx, "data/dfx_ens.rds")
+# dfx <- readRDS("data/dfx_ens.rds")
 
 ggplot(dfx, aes(date)) +
   geom_ribbon(aes(ymin = ens_min, ymax = ens_max), fill = "grey80") +
@@ -357,9 +359,6 @@ ggsave(filename = "images/PG_ens_2017.eps", plot = last_plot(),
        device = "eps", width = W, height = H, units = "in")
 
 # Full time series and trends at Pedrogao Grande
-
-library(dplyr)
-library(dygraphs)
 
 dates <- seq.Date(from = as.Date("1980-01-01"),
                   to = as.Date("2019-12-31"),
@@ -384,6 +383,19 @@ df_mon <- xts::apply.monthly(df, FUN = mean)
 dygraph(df_mon, main = "Monthly FWI from GEFF-ERA5 ENS at Pedrógão Grande") %>%
   dyGroup(paste0("em", 0:9), color = rep("gray", 10)) %>%
   dySeries("mean", color = "red")
+
+# Time series decomposition: trend + seasonality + random
+install.packages("forecast")
+library(forecast)
+
+# To detect the underlying trend, we smoothe the time series using the “centred moving average“. To perform the decomposition, it is vital to use a moving window of the exact size of the seasonality. Therefore, to decompose a time series we need to know the seasonality period: weekly, monthly, etc…
+em0 <- df$em0
+trend_em0 = forecast::ma(em0, order = 30, centre = T)
+plot(as.ts(em0))
+lines(trend_em0)
+plot(as.ts(trend_em0))
+
+decompose(x = em0, type = "additive")
 
 # FIGURE 7: comparison with ENSO (boxplot) #####################################
 
