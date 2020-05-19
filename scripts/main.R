@@ -4,9 +4,12 @@ library("raster")
 library("rnaturalearthdata")
 library("colorspace")
 library("dplyr")
+library("lubridate")
+library("xts")
 library("ggplot2")
 library("ggmap")
 library("dygraphs")
+library("forecast")
 
 # Get data from GFWED, ERAI AND ERA5 for year 2017 #############################
 
@@ -359,7 +362,6 @@ ggsave(filename = "images/PG_ens_2017.eps", plot = last_plot(),
        device = "eps", width = W, height = H, units = "in")
 
 # Full time series and trends at Pedrogao Grande
-
 dates <- seq.Date(from = as.Date("1980-01-01"),
                   to = as.Date("2019-12-31"),
                   by = "day")
@@ -370,32 +372,55 @@ df <- as.data.frame(x, xy = TRUE) %>%
   tidyr::pivot_wider(names_from = "x", values_from = "Index") %>%
   dplyr::arrange(y)  %>%
   mutate(dates = dates)
+names(df)[2:11] <- paste0("em", 0:9)
 df$mean <- apply(df[, 2:11], 1, mean)
-df <- xts::xts(x = df[, c(2:11, 13)], order.by = df$dates)
-names(df)[1:10] <- paste0("em", 0:9)
+df$min <- apply(df[, 2:11], 1, min)
+df$max <- apply(df[, 2:11], 1, max)
+df$spread <- df$max - df$min
 
-dygraph(df, main = "Daily FWI from GEFF-ERA5 ENS at Pedrógão Grande") %>%
+rm(x, dates, ncfname)
+
+# Aggregate mean/min/max to weekly values
+dfts <- xts::as.xts(df[, -12], order.by = as.Date(df$dates))
+dfm <- xts::apply.monthly(dfts, mean)
+# Keep June only
+dfmjune <- dfm[lubridate::month(index(dfm)) == 6, ]
+
+rm(dfts, dfm)
+
+# Decomposition - 40 years - JUNE ONLY - force linear trend ####################
+df_june <- df[lubridate::month(df$dates) == 6, ]
+# Frequency is 1 month of daily data per year
+emean <- ts(data = df_june$mean, start = c(1980, 01), frequency = 365.25/12)
+decompose_df <- tslm(emean ~ trend + fourier(emean, 2))
+trend <- coef(decompose_df)[1] + coef(decompose_df)['trend']*seq_along(emean)
+components <- cbind(
+  data = emean,
+  trend = trend,
+  season = emean - trend - residuals(decompose_df),
+  remainder = residuals(decompose_df)
+)
+autoplot(components, facet=TRUE)
+
+cairo_ps("images/trend_ens.eps", width = W, height = H)
+barplot(dfmjune$spread)
+barplot(height = c(rep(NA, 37),
+                   dfmjune$spread[lubridate::year(index(dfmjune)) == 2017],
+                   NA, NA),
+        add = TRUE, col = "red")
+abline(a = 0, b = coef(decompose_df)[2]*length(emean)/length(dfmjune$spread),
+       col = "red", lwd = 2)
+dev.off()
+
+# More advanced plots
+df_ts <- xts::xts(x = df[, c(2:11, 13)], order.by = df$dates)
+dygraph(df_ts, main = "Daily FWI from GEFF-ERA5 ENS at Pedrógão Grande") %>%
   dyGroup(paste0("em", 0:9), color = rep("gray", 10)) %>%
   dySeries("mean", color = "red")
-
-df_mon <- xts::apply.monthly(df, FUN = mean)
-
+df_mon <- xts::apply.monthly(df_ts, FUN = mean)
 dygraph(df_mon, main = "Monthly FWI from GEFF-ERA5 ENS at Pedrógão Grande") %>%
   dyGroup(paste0("em", 0:9), color = rep("gray", 10)) %>%
   dySeries("mean", color = "red")
-
-# Time series decomposition: trend + seasonality + random
-install.packages("forecast")
-library(forecast)
-
-# To detect the underlying trend, we smoothe the time series using the “centred moving average“. To perform the decomposition, it is vital to use a moving window of the exact size of the seasonality. Therefore, to decompose a time series we need to know the seasonality period: weekly, monthly, etc…
-em0 <- df$em0
-trend_em0 = forecast::ma(em0, order = 30, centre = T)
-plot(as.ts(em0))
-lines(trend_em0)
-plot(as.ts(trend_em0))
-
-decompose(x = em0, type = "additive")
 
 # FIGURE 7: comparison with ENSO (boxplot) #####################################
 
